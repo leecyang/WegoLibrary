@@ -1,6 +1,6 @@
 <div align="center">
-  <img src="frontend/public/vite.svg" width="88" height="88" alt="Wegolibrary Logo" />
-  <h1>Wegolibrary</h1>
+  <img src="frontend/public/vite.svg" width="88" height="88" alt="WegoLibrary Logo" />
+  <h1>WegoLibrary</h1>
   <p>自托管的到馆/签到小助手：一次配置，日常省心。</p>
   <p>
     <a href="#快速开始">快速开始</a> ·
@@ -16,7 +16,7 @@
   </p>
 </div>
 
-Wegolibrary 可搭配《我去图书馆》等相关使用场景：你在微信内完成授权后，把链接粘贴进来，系统会帮你保持会话尽量可用，并在你需要时执行签到；也支持按你的选择自动执行，并在状态页给出最近结果。
+WegoLibrary 可搭配《我去图书馆》等相关使用场景：你在微信内完成授权后，把链接粘贴进来，系统会帮你保持会话尽量可用，并在你需要时执行签到；也支持按你的选择自动执行，并在状态页给出最近结果。
 
 它支持多用户独立使用，也提供管理员后台，适合部署在自己的电脑或服务器上，作为一个轻量、可控的日常工具。
 
