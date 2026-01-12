@@ -1,0 +1,23 @@
+version: '3.8'
+
+services:
+  backend:
+    build: ./backend
+    container_name: wegolib-backend
+    restart: always
+    ports:
+      - "18082:8000"
+    volumes:
+      - ./backend/data:/app/data
+    environment:
+      - TZ=Asia/Shanghai
+      - SQLITE_DB_PATH=/app/data/database.db
+
+  frontend:
+    build: ./frontend
+    container_name: wegolib-frontend
+    restart: always
+    ports:
+      - "18081:80"
+    depends_on:
+      - backend

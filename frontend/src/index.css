@@ -1,0 +1,117 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html, body, #root {
+    @apply h-full;
+  }
+  body {
+    @apply bg-slate-50 text-slate-800 antialiased;
+    -webkit-tap-highlight-color: transparent;
+    -webkit-touch-callout: none;
+    overscroll-behavior: none;
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  }
+  /* 优化中文排版 */
+  h1, h2, h3, h4, h5, h6 {
+    @apply tracking-tight;
+  }
+  p, span, label {
+    @apply leading-relaxed;
+  }
+}
+
+@layer components {
+  .glass-card {
+    @apply bg-white border border-slate-100 shadow-card rounded-2xl;
+  }
+  .glass-card-interactive {
+    @apply bg-white border border-slate-100 shadow-card rounded-2xl cursor-pointer
+           transition-all duration-200 ease-out
+           hover:shadow-card-hover hover:border-slate-200
+           active:scale-[0.98];
+  }
+  .input-field {
+    @apply w-full px-4 py-3.5 rounded-xl border border-slate-200
+           focus:border-primary focus:ring-2 focus:ring-primary/20
+           outline-none transition-all duration-200 bg-white
+           text-base placeholder:text-slate-400;
+  }
+  .btn-primary {
+    @apply px-6 py-3.5 rounded-xl font-semibold text-white
+           bg-primary hover:bg-primary-hover
+           shadow-lg shadow-primary/25
+           active:scale-[0.97] transition-all duration-200
+           disabled:opacity-50 disabled:cursor-not-allowed disabled:active:scale-100
+           cursor-pointer select-none;
+  }
+  .btn-secondary {
+    @apply px-4 py-2.5 rounded-xl font-medium text-slate-700
+           bg-slate-100 hover:bg-slate-200
+           active:scale-[0.97] transition-all duration-200
+           disabled:opacity-50 disabled:cursor-not-allowed
+           cursor-pointer select-none;
+  }
+  .btn-ghost {
+    @apply px-4 py-2.5 rounded-xl font-medium text-slate-600
+           hover:bg-slate-100
+           active:scale-[0.97] transition-all duration-200
+           cursor-pointer select-none;
+  }
+  /* 状态标签 */
+  .status-badge {
+    @apply inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold;
+  }
+  .status-badge-success {
+    @apply status-badge bg-success-light text-success;
+  }
+  .status-badge-warning {
+    @apply status-badge bg-warning-light text-warning;
+  }
+  .status-badge-danger {
+    @apply status-badge bg-danger-light text-danger;
+  }
+  .status-badge-neutral {
+    @apply status-badge bg-slate-100 text-slate-600;
+  }
+  /* 信息卡片 */
+  .info-card {
+    @apply p-4 rounded-xl border;
+  }
+  .info-card-blue {
+    @apply info-card bg-primary-light/50 border-primary/20;
+  }
+  .info-card-orange {
+    @apply info-card bg-cta-light/50 border-cta/20;
+  }
+  .info-card-success {
+    @apply info-card bg-success-light border-success/20;
+  }
+  .info-card-danger {
+    @apply info-card bg-danger-light border-danger/20;
+  }
+}
+
+@layer utilities {
+  .safe-area-top {
+    padding-top: env(safe-area-inset-top);
+  }
+  .safe-area-bottom {
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  /* 触控优化 */
+  .touch-target {
+    @apply min-h-[44px] min-w-[44px];
+  }
+  /* 减少动画偏好 */
+  @media (prefers-reduced-motion: reduce) {
+    .animate-pulse, .animate-spin, .animate-bounce,
+    .animate-fade-in, .animate-slide-up, .animate-scale-in {
+      animation: none !important;
+    }
+    * {
+      transition-duration: 0.01ms !important;
+    }
+  }
+}

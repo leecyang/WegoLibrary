@@ -1,0 +1,9 @@
+fastapi==0.109.0
+uvicorn==0.27.0
+requests==2.31.0
+sqlmodel==0.0.14
+apscheduler==3.10.4
+pycryptodome==3.20.0
+bcrypt
+python-jose[cryptography]==3.3.0
+python-multipart==0.0.9
