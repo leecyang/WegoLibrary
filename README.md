@@ -3,6 +3,7 @@
   <h1>WegoLibrary</h1>
   <p>自托管的到馆/签到小助手：一次配置，日常省心。</p>
   <p>
+    <a href="https://golibrary.xyz/" target="_blank">🌐 在线演示</a> ·
     <a href="#快速开始">快速开始</a> ·
     <a href="#使用方式">使用方式</a> ·
     <a href="#管理员">管理员</a> ·
@@ -19,6 +20,8 @@
 WegoLibrary 可搭配《我去图书馆》等相关使用场景：你在微信内完成授权后，把链接粘贴进来，系统会帮你保持会话尽量可用，并在你需要时执行签到；也支持按你的选择自动执行，并在状态页给出最近结果。
 
 它支持多用户独立使用，也提供管理员后台，适合部署在自己的电脑或服务器上，作为一个轻量、可控的日常工具。
+
+> **想先体验？** 访问 [https://golibrary.xyz/](https://golibrary.xyz/) 注册体验，无需部署即可使用全部功能。
 
 ```mermaid
 flowchart LR
@@ -60,3 +63,22 @@ docker compose up -d --build
 ## 免责声明
 
 本项目仅用于学习与个人效率提升，请遵守相关平台与场景的使用规则；因使用不当造成的风险由使用者自行承担。
+
+## 支持项目
+
+如果本项目对您有所帮助，您可以请我喝一杯咖啡☕~~~
+
+<div align="center">
+  <img src="frontend/public/donate.png" width="300" alt="Buy Me a Coffee" />
+  <p><em>感谢您的支持！</em></p>
+</div>
+
+## 维护与支持
+
+如果您在使用过程中遇到问题、有功能建议或想要参与贡献，欢迎通过以下方式联系：
+
+- 📧 邮箱：[3439550021@qq.com](mailto:3439550021@qq.com)
+- 💬 Issue：在本仓库提交 Issue
+- 🔧 Pull Request：欢迎提交 PR 改进项目
+
+我会尽力及时回复和处理您的反馈。
