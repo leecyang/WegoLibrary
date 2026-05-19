@@ -4,6 +4,8 @@ import type { AxiosError } from 'axios';
 import { parseSessionIdFromUrl, updateConfig, type StatusData } from '../lib/api';
 import { extractSessionIdFromText } from '../lib/sessionId';
 
+const WECHAT_QR_URL = 'https://imagebed.way2api.fun/file/wegolibrary/1779168428849_qr.png';
+
 interface Props {
   currentData: StatusData | null;
   onUpdate: () => void;
@@ -161,7 +163,7 @@ export const ConfigTab: React.FC<Props> = ({ currentData, onUpdate }) => {
            {/* QR Code and Instructions */}
            <div className="flex flex-col items-center gap-4">
               <div className="w-40 h-40 bg-white p-2 rounded-xl shadow-sm border border-slate-100">
-                <img src="/qr.png" alt="Scan to Login" className="w-full h-full object-contain" />
+                <img src={WECHAT_QR_URL} alt="Scan to Login" className="w-full h-full object-contain" />
               </div>
               <div className="text-center space-y-1">
                 <p className="text-sm font-medium text-slate-700">1. 使用微信“扫一扫”</p>
