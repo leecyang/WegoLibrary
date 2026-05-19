@@ -91,6 +91,83 @@
   .info-card-danger {
     @apply info-card bg-danger-light border-danger/20;
   }
+  .announcement-markdown {
+    @apply text-sm text-slate-700 leading-7 break-words;
+  }
+  .announcement-markdown > * + * {
+    @apply mt-3;
+  }
+  .announcement-markdown h1 {
+    @apply text-lg font-semibold text-slate-900;
+  }
+  .announcement-markdown h2 {
+    @apply text-base font-semibold text-slate-900;
+  }
+  .announcement-markdown h3,
+  .announcement-markdown h4,
+  .announcement-markdown h5,
+  .announcement-markdown h6 {
+    @apply text-sm font-semibold text-slate-900;
+  }
+  .announcement-markdown p {
+    @apply text-slate-700;
+  }
+  .announcement-markdown ul,
+  .announcement-markdown ol {
+    @apply pl-5;
+  }
+  .announcement-markdown ul {
+    list-style-type: disc;
+  }
+  .announcement-markdown ol {
+    list-style-type: decimal;
+  }
+  .announcement-markdown li {
+    @apply leading-7;
+  }
+  .announcement-markdown li + li {
+    @apply mt-1;
+  }
+  .announcement-markdown blockquote {
+    @apply rounded-r-xl border-l-4 border-primary/30 bg-primary-light/50 px-4 py-3 text-slate-600;
+  }
+  .announcement-markdown hr {
+    @apply my-4 border-slate-200;
+  }
+  .announcement-markdown a {
+    @apply break-all text-primary underline underline-offset-4;
+  }
+  .announcement-markdown strong {
+    @apply font-semibold text-slate-900;
+  }
+  .announcement-markdown code {
+    @apply rounded-md bg-slate-100 px-1.5 py-0.5 font-mono text-[0.9em] text-slate-800;
+  }
+  .announcement-markdown pre {
+    @apply overflow-x-auto rounded-xl bg-slate-900 px-4 py-3 text-slate-100;
+  }
+  .announcement-markdown pre code {
+    @apply bg-transparent p-0 text-inherit;
+  }
+  .announcement-markdown-table {
+    @apply overflow-x-auto;
+  }
+  .announcement-markdown table {
+    @apply min-w-full border-collapse text-left text-sm;
+  }
+  .announcement-markdown th {
+    @apply bg-slate-100 font-semibold text-slate-700;
+  }
+  .announcement-markdown th,
+  .announcement-markdown td {
+    @apply border border-slate-200 px-3 py-2 align-top;
+  }
+  .announcement-markdown img {
+    @apply max-w-full rounded-lg border border-slate-200;
+  }
+  .announcement-markdown input[type="checkbox"] {
+    @apply mr-2 h-4 w-4 align-middle;
+  }
 }
 
 @layer utilities {

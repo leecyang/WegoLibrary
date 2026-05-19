@@ -11,11 +11,11 @@ from datetime import timedelta, datetime
 from contextlib import asynccontextmanager
 
 from app.database import (
-    create_db_and_tables, engine, User, Config,
+    create_db_and_tables, engine, User, Config, Announcement,
     get_config_by_owner, update_config_by_owner,
     log_checkin_by_owner, log_keepalive_by_owner,
     create_user, get_user_by_username, get_all_configs, delete_user,
-    get_all_users
+    get_all_users, get_announcement, get_or_create_announcement
 )
 from app.scheduler import start_scheduler, shutdown_scheduler, keep_alive_for_user, start_auto_checkin_for_user, stop_auto_checkin_for_user
 from app.core import WegolibCore
@@ -75,6 +75,23 @@ class AdminUserConfigResponse(BaseModel):
     is_configured: bool
     last_checkin: str
     status: str # "Active" or "Inactive"
+
+class AnnouncementResponse(BaseModel):
+    has_announcement: bool
+    content: str
+    published_at: Optional[str] = None
+
+class AdminAnnouncementResponse(BaseModel):
+    draft_content: str
+    published_content: str
+    is_published: bool
+    updated_at: Optional[str] = None
+    published_at: Optional[str] = None
+
+class UpdateAnnouncementDraftRequest(BaseModel):
+    content: str = ""
+
+ANNOUNCEMENT_MAX_LENGTH = 2000
 
 # ============ Auth Routes ============
 
@@ -137,6 +154,46 @@ def _extract_wechat_sess_id_from_set_cookie(set_cookie: Optional[str]) -> Option
         return None
     m = re.search(r"(?i)wechatSESS_ID=([^;,\s]+)", set_cookie)
     return m.group(1) if m else None
+
+def _format_datetime(value: Optional[datetime]) -> Optional[str]:
+    return value.strftime("%Y-%m-%d %H:%M:%S") if value else None
+
+def _normalize_announcement_content(content: Optional[str]) -> str:
+    normalized = (content or "").strip()
+    if len(normalized) > ANNOUNCEMENT_MAX_LENGTH:
+        raise HTTPException(
+            status_code=400,
+            detail=f"公告正文不能超过 {ANNOUNCEMENT_MAX_LENGTH} 个字符",
+        )
+    return normalized
+
+def _build_public_announcement_response(announcement: Optional[Announcement]) -> AnnouncementResponse:
+    if not announcement or not announcement.is_published or not announcement.published_content:
+        return AnnouncementResponse(has_announcement=False, content="", published_at=None)
+
+    return AnnouncementResponse(
+        has_announcement=True,
+        content=announcement.published_content,
+        published_at=_format_datetime(announcement.published_at),
+    )
+
+def _build_admin_announcement_response(announcement: Optional[Announcement]) -> AdminAnnouncementResponse:
+    if not announcement:
+        return AdminAnnouncementResponse(
+            draft_content="",
+            published_content="",
+            is_published=False,
+            updated_at=None,
+            published_at=None,
+        )
+
+    return AdminAnnouncementResponse(
+        draft_content=announcement.draft_content or "",
+        published_content=announcement.published_content or "",
+        is_published=announcement.is_published,
+        updated_at=_format_datetime(announcement.updated_at),
+        published_at=_format_datetime(announcement.published_at),
+    )
 
 def _extract_wechat_sess_id_from_response(resp: requests.Response) -> Optional[str]:
     sid = resp.cookies.get("wechatSESS_ID")
@@ -206,6 +263,11 @@ def parse_sessionid(req: ParseSessionIdRequest, current_user: User = Depends(get
         )
 
     return {"session_id": f"wechatSESS_ID={wechat_sess_id}"}
+
+@app.get("/api/announcement", response_model=AnnouncementResponse)
+def get_public_announcement(current_user: User = Depends(get_current_user), session: Session = Depends(get_session)):
+    announcement = get_announcement(session)
+    return _build_public_announcement_response(announcement)
 
 @app.get("/api/status")
 def get_status(current_user: User = Depends(get_current_user), session: Session = Depends(get_session)):
@@ -313,6 +375,55 @@ def disable_auto_checkin(current_user: User = Depends(get_current_user), session
     return {"message": "关闭成功"}
 
 # ============ Admin Routes ============
+
+@app.get("/api/admin/announcement", response_model=AdminAnnouncementResponse)
+def get_admin_announcement(admin: User = Depends(get_current_admin), session: Session = Depends(get_session)):
+    announcement = get_announcement(session)
+    return _build_admin_announcement_response(announcement)
+
+@app.put("/api/admin/announcement/draft", response_model=AdminAnnouncementResponse)
+def update_admin_announcement_draft(
+    req: UpdateAnnouncementDraftRequest,
+    admin: User = Depends(get_current_admin),
+    session: Session = Depends(get_session),
+):
+    announcement = get_or_create_announcement(session)
+    announcement.draft_content = _normalize_announcement_content(req.content)
+    announcement.updated_at = datetime.now()
+    session.add(announcement)
+    session.commit()
+    session.refresh(announcement)
+    return _build_admin_announcement_response(announcement)
+
+@app.post("/api/admin/announcement/publish", response_model=AdminAnnouncementResponse)
+def publish_admin_announcement(admin: User = Depends(get_current_admin), session: Session = Depends(get_session)):
+    announcement = get_or_create_announcement(session)
+    draft_content = _normalize_announcement_content(announcement.draft_content)
+    if not draft_content:
+        raise HTTPException(status_code=400, detail="草稿为空，无法发布")
+
+    now = datetime.now()
+    announcement.draft_content = draft_content
+    announcement.published_content = draft_content
+    announcement.is_published = True
+    announcement.updated_at = now
+    announcement.published_at = now
+    session.add(announcement)
+    session.commit()
+    session.refresh(announcement)
+    return _build_admin_announcement_response(announcement)
+
+@app.post("/api/admin/announcement/unpublish", response_model=AdminAnnouncementResponse)
+def unpublish_admin_announcement(admin: User = Depends(get_current_admin), session: Session = Depends(get_session)):
+    announcement = get_or_create_announcement(session)
+    announcement.is_published = False
+    announcement.published_content = ""
+    announcement.published_at = None
+    announcement.updated_at = datetime.now()
+    session.add(announcement)
+    session.commit()
+    session.refresh(announcement)
+    return _build_admin_announcement_response(announcement)
 
 @app.get("/api/admin/users", response_model=List[AdminUserConfigResponse])
 def get_admin_users(admin: User = Depends(get_current_admin), session: Session = Depends(get_session)):

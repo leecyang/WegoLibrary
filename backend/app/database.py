@@ -30,6 +30,14 @@ class Config(SQLModel, table=True):
     created_at: Optional[datetime] = Field(default_factory=datetime.now)
     auto_checkin_expire_at: Optional[datetime] = None
 
+class Announcement(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    draft_content: str = Field(default="")
+    published_content: str = Field(default="")
+    is_published: bool = Field(default=False)
+    updated_at: Optional[datetime] = Field(default_factory=datetime.now)
+    published_at: Optional[datetime] = None
+
 # ============ 数据库连接 ============
 
 def _get_sqlite_url() -> str:
@@ -180,6 +188,22 @@ def update_session_id_for_config(session: Session, config: Config, new_session_i
     config.session_id = new_session_id
     session.add(config)
     session.commit()
+
+# ============ 公告相关操作 ============
+
+def get_announcement(session: Session) -> Optional[Announcement]:
+    return session.exec(select(Announcement)).first()
+
+def get_or_create_announcement(session: Session) -> Announcement:
+    announcement = get_announcement(session)
+    if announcement:
+        return announcement
+
+    announcement = Announcement()
+    session.add(announcement)
+    session.commit()
+    session.refresh(announcement)
+    return announcement
 
 # ============ 兼容旧接口（已标记为废弃，保留至完全重构完成） ============
 # 下面的函数如果不再被 main.py 调用，可以删除。

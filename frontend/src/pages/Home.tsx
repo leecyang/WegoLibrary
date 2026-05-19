@@ -1,34 +1,56 @@
-import { useState, useEffect } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { StatusTab } from '../components/StatusTab';
 import { ConfigTab } from '../components/ConfigTab';
 import { BottomNav, type TabType } from '../components/BottomNav';
 import { FloatingActions } from '../components/FloatingActions';
-import { getStatus, type StatusData } from '../lib/api';
-import { Library, LogOut, Settings } from 'lucide-react';
+import { AnnouncementOverlay } from '../components/AnnouncementOverlay';
+import { getStatus, getAnnouncement, type StatusData, type AnnouncementData } from '../lib/api';
+import { BellRing, Library, LogOut, Settings } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useNavigate } from 'react-router-dom';
 
 function Home() {
   const [status, setStatus] = useState<StatusData | null>(null);
+  const [announcement, setAnnouncement] = useState<AnnouncementData | null>(null);
+  const [isAnnouncementOpen, setIsAnnouncementOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<TabType>('status');
   const { user, logout } = useAuth();
   const navigate = useNavigate();
+  const hasShownAnnouncementRef = useRef(false);
 
-  const fetchStatus = async () => {
-    try {
-      const data = await getStatus();
-      setStatus(data);
-    } catch (error) {
-      console.error('获取状态失败', error);
-    } finally {
-      setLoading(false);
+  const fetchHomeData = async () => {
+    const [statusResult, announcementResult] = await Promise.allSettled([
+      getStatus(),
+      getAnnouncement(),
+    ]);
+
+    if (statusResult.status === 'fulfilled') {
+      setStatus(statusResult.value);
+    } else {
+      console.error('获取状态失败', statusResult.reason);
     }
+
+    if (announcementResult.status === 'fulfilled') {
+      setAnnouncement(announcementResult.value);
+      if (announcementResult.value.has_announcement && !hasShownAnnouncementRef.current) {
+        setIsAnnouncementOpen(true);
+        hasShownAnnouncementRef.current = true;
+      }
+      if (!announcementResult.value.has_announcement) {
+        setIsAnnouncementOpen(false);
+        hasShownAnnouncementRef.current = false;
+      }
+    } else {
+      console.error('获取公告失败', announcementResult.reason);
+    }
+
+    setLoading(false);
   };
 
   useEffect(() => {
-    fetchStatus();
-    const interval = setInterval(fetchStatus, 10000);
+    fetchHomeData();
+    const interval = setInterval(fetchHomeData, 10000);
     return () => clearInterval(interval);
   }, []);
 
@@ -39,6 +61,12 @@ function Home() {
 
   return (
     <div className="fixed inset-0 flex flex-col bg-slate-50 overflow-hidden">
+      <AnnouncementOverlay
+        announcement={announcement}
+        isOpen={isAnnouncementOpen}
+        onMinimize={() => setIsAnnouncementOpen(false)}
+      />
+
       {/* Header */}
       <header className="flex-shrink-0 px-6 py-4 bg-white border-b border-slate-100 z-10">
         <div className="max-w-md mx-auto flex items-center justify-between gap-4">
@@ -52,6 +80,16 @@ function Home() {
             </div>
           </div>
           <div className="flex gap-2">
+            {announcement?.has_announcement && !isAnnouncementOpen && (
+              <button
+                onClick={() => setIsAnnouncementOpen(true)}
+                className="p-2 text-slate-400 hover:text-primary transition-colors"
+                title="查看站点公告"
+                aria-label="查看站点公告"
+              >
+                <BellRing className="w-5 h-5" />
+              </button>
+            )}
             {user?.is_admin && (
               <button
                 onClick={() => navigate('/admin')}
@@ -75,11 +113,11 @@ function Home() {
       {/* Main Content Area */}
       <main className="flex-1 overflow-hidden max-w-md mx-auto w-full relative">
         {activeTab === 'status' && <StatusTab data={status} loading={loading} />}
-        {activeTab === 'config' && <ConfigTab currentData={status} onUpdate={fetchStatus} />}
+        {activeTab === 'config' && <ConfigTab currentData={status} onUpdate={fetchHomeData} />}
       </main>
 
       {/* Floating Action Button */}
-      <FloatingActions onUpdate={fetchStatus} autoCheckinEnabled={!!status?.auto_checkin_enabled} />
+      <FloatingActions onUpdate={fetchHomeData} autoCheckinEnabled={!!status?.auto_checkin_enabled} />
 
       {/* Bottom Navigation */}
       <BottomNav activeTab={activeTab} onChange={setActiveTab} />

@@ -39,6 +39,24 @@ export interface StatusData {
   auto_checkin_enabled?: boolean;
 }
 
+export interface AnnouncementData {
+  has_announcement: boolean;
+  content: string;
+  published_at: string | null;
+}
+
+export interface AdminAnnouncementData {
+  draft_content: string;
+  published_content: string;
+  is_published: boolean;
+  updated_at: string | null;
+  published_at: string | null;
+}
+
+export interface UpdateAnnouncementDraftRequest {
+  content: string;
+}
+
 export interface AdminUserConfig {
   user_id: number;
   username: string;
@@ -76,6 +94,11 @@ export const getStatus = async () => {
   return res.data;
 };
 
+export const getAnnouncement = async () => {
+  const res = await api.get<AnnouncementData>('/announcement');
+  return res.data;
+};
+
 export const updateConfig = async (session_id: string, venueMajor: number, venueMinor: number) => {
   const res = await api.post('/config', { session_id, venue_major: venueMajor, venue_minor: venueMinor });
   return res.data;
@@ -110,6 +133,26 @@ export const disableAutoCheckIn = async () => {
 
 export const getAdminUsers = async () => {
   const res = await api.get<AdminUserConfig[]>('/admin/users');
+  return res.data;
+};
+
+export const getAdminAnnouncement = async () => {
+  const res = await api.get<AdminAnnouncementData>('/admin/announcement');
+  return res.data;
+};
+
+export const updateAdminAnnouncementDraft = async (payload: UpdateAnnouncementDraftRequest) => {
+  const res = await api.put<AdminAnnouncementData>('/admin/announcement/draft', payload);
+  return res.data;
+};
+
+export const publishAdminAnnouncement = async () => {
+  const res = await api.post<AdminAnnouncementData>('/admin/announcement/publish');
+  return res.data;
+};
+
+export const unpublishAdminAnnouncement = async () => {
+  const res = await api.post<AdminAnnouncementData>('/admin/announcement/unpublish');
   return res.data;
 };
 
