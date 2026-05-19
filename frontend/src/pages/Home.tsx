@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { StatusTab } from '../components/StatusTab';
 import { ConfigTab } from '../components/ConfigTab';
 import { BottomNav, type TabType } from '../components/BottomNav';
@@ -9,6 +9,36 @@ import { BellRing, Library, LogOut, Settings } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useNavigate } from 'react-router-dom';
 
+const ANNOUNCEMENT_LAST_SHOWN_KEY_PREFIX = 'announcement-last-shown-date';
+
+function getAnnouncementStorageKey(username?: string) {
+  return `${ANNOUNCEMENT_LAST_SHOWN_KEY_PREFIX}:${username || 'guest'}`;
+}
+
+function getTodayString() {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const day = String(now.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function getLastAnnouncementShownDate(username?: string) {
+  try {
+    return localStorage.getItem(getAnnouncementStorageKey(username));
+  } catch {
+    return null;
+  }
+}
+
+function markAnnouncementShownToday(username?: string) {
+  try {
+    localStorage.setItem(getAnnouncementStorageKey(username), getTodayString());
+  } catch {
+    // Ignore storage write failures and fall back to current-session behavior.
+  }
+}
+
 function Home() {
   const [status, setStatus] = useState<StatusData | null>(null);
   const [announcement, setAnnouncement] = useState<AnnouncementData | null>(null);
@@ -17,7 +47,6 @@ function Home() {
   const [activeTab, setActiveTab] = useState<TabType>('status');
   const { user, logout } = useAuth();
   const navigate = useNavigate();
-  const hasShownAnnouncementRef = useRef(false);
 
   const fetchHomeData = async () => {
     const [statusResult, announcementResult] = await Promise.allSettled([
@@ -33,13 +62,15 @@ function Home() {
 
     if (announcementResult.status === 'fulfilled') {
       setAnnouncement(announcementResult.value);
-      if (announcementResult.value.has_announcement && !hasShownAnnouncementRef.current) {
-        setIsAnnouncementOpen(true);
-        hasShownAnnouncementRef.current = true;
-      }
-      if (!announcementResult.value.has_announcement) {
+      if (announcementResult.value.has_announcement) {
+        const lastShownDate = getLastAnnouncementShownDate(user?.username);
+        const today = getTodayString();
+        if (lastShownDate !== today) {
+          setIsAnnouncementOpen(true);
+          markAnnouncementShownToday(user?.username);
+        }
+      } else {
         setIsAnnouncementOpen(false);
-        hasShownAnnouncementRef.current = false;
       }
     } else {
       console.error('获取公告失败', announcementResult.reason);
@@ -52,7 +83,7 @@ function Home() {
     fetchHomeData();
     const interval = setInterval(fetchHomeData, 10000);
     return () => clearInterval(interval);
-  }, []);
+  }, [user?.username]);
 
   const handleLogout = () => {
     logout();
