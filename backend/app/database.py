@@ -14,6 +14,15 @@ class User(SQLModel, table=True):
     is_admin: bool = Field(default=False)
     created_at: datetime = Field(default_factory=datetime.now)
 
+class AuthSession(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    user_id: int = Field(foreign_key="user.id", index=True)
+    token_hash: str = Field(index=True, unique=True)
+    created_at: datetime = Field(default_factory=datetime.now)
+    last_used_at: datetime = Field(default_factory=datetime.now)
+    expires_at: datetime
+    revoked_at: Optional[datetime] = None
+
 class Config(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     # user_id 保留用于兼容或作为非关联的标识，但在新系统中主要使用 owner_id
@@ -118,6 +127,9 @@ def delete_user(session: Session, user_id: int):
         config = get_config_by_owner(session, user_id)
         if config:
             session.delete(config)
+        auth_sessions = list(session.exec(select(AuthSession).where(AuthSession.user_id == user_id)).all())
+        for auth_session in auth_sessions:
+            session.delete(auth_session)
         session.delete(user)
         session.commit()
 
@@ -131,6 +143,32 @@ def get_config_by_owner(session: Session, owner_id: int) -> Optional[Config]:
 def get_all_configs(session: Session) -> List[Config]:
     """获取所有配置（管理员用）"""
     return list(session.exec(select(Config)).all())
+
+def get_auth_session_by_token_hash(session: Session, token_hash: str) -> Optional[AuthSession]:
+    statement = select(AuthSession).where(AuthSession.token_hash == token_hash)
+    return session.exec(statement).first()
+
+def create_auth_session(
+    session: Session,
+    user_id: int,
+    token_hash: str,
+    expires_at: datetime,
+) -> AuthSession:
+    auth_session = AuthSession(
+        user_id=user_id,
+        token_hash=token_hash,
+        expires_at=expires_at,
+    )
+    session.add(auth_session)
+    session.commit()
+    session.refresh(auth_session)
+    return auth_session
+
+def update_auth_session(session: Session, auth_session: AuthSession) -> AuthSession:
+    session.add(auth_session)
+    session.commit()
+    session.refresh(auth_session)
+    return auth_session
 
 def get_all_active_configs(session: Session) -> List[Config]:
     """获取所有活跃用户的配置（用于定时任务）"""

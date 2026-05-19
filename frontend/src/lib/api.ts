@@ -4,18 +4,10 @@ const API_BASE = '/api';
 
 export const api = axios.create({
   baseURL: API_BASE,
+  withCredentials: true,
   headers: {
     'Content-Type': 'application/json',
   },
-});
-
-// 添加请求拦截器，自动注入 Token
-api.interceptors.request.use((config) => {
-  const token = localStorage.getItem('token');
-  if (token) {
-    config.headers['Authorization'] = `Bearer ${token}`;
-  }
-  return config;
 });
 
 // ============ 类型定义 ============
@@ -84,6 +76,11 @@ export const register = async (username: string, password: string) => {
 
 export const getMe = async () => {
   const res = await api.get<User>('/auth/me');
+  return res.data;
+};
+
+export const logout = async () => {
+  const res = await api.post<{ message: string }>('/auth/logout');
   return res.data;
 };
 

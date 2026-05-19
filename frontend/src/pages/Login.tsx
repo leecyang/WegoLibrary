@@ -19,8 +19,8 @@ export default function Login() {
     setError('');
     setLoading(true);
     try {
-      const data = await apiLogin(username, password);
-      await login(data.access_token);
+      await apiLogin(username, password);
+      await login();
       navigate('/');
     } catch (err: any) {
       setError(err.response?.data?.detail || '登录失败');

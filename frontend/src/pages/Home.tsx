@@ -85,8 +85,8 @@ function Home() {
     return () => clearInterval(interval);
   }, [user?.username]);
 
-  const handleLogout = () => {
-    logout();
+  const handleLogout = async () => {
+    await logout();
     navigate('/login');
   };
 
