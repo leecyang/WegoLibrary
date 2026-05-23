@@ -11,7 +11,7 @@ interface Props {
 export const StatusTab: React.FC<Props> = ({ data, loading }) => {
   if (loading || !data) {
     return (
-      <div className="h-full flex flex-col p-4 gap-4 animate-fade-in">
+      <div className="h-full flex flex-col p-4 pb-bottom-nav gap-4 animate-fade-in overflow-y-auto scrollbar-none">
         <div className="glass-card p-5">
           <div className="flex items-center justify-between mb-4">
             <div className="h-6 bg-slate-100 rounded-lg w-24 animate-pulse" />
@@ -54,7 +54,7 @@ export const StatusTab: React.FC<Props> = ({ data, loading }) => {
   };
 
   return (
-    <div className="h-full flex flex-col px-4 pt-4 pb-24 animate-fade-in gap-4 overflow-y-auto scrollbar-none">
+    <div className="h-full flex flex-col px-4 pt-4 pb-bottom-nav animate-fade-in gap-4 overflow-y-auto scrollbar-none">
       {/* 主状态卡片 */}
       <div className="glass-card p-5">
         <div className="flex items-center justify-between mb-5">

@@ -12,6 +12,8 @@
     -webkit-touch-callout: none;
     overscroll-behavior: none;
     font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+    --bottom-nav-height: 4rem;
+    --bottom-nav-space: calc(var(--bottom-nav-height) + env(safe-area-inset-bottom));
   }
   /* 优化中文排版 */
   h1, h2, h3, h4, h5, h6 {
@@ -186,6 +188,12 @@
   }
   .safe-area-bottom {
     padding-bottom: env(safe-area-inset-bottom);
+  }
+  .pb-bottom-nav {
+    padding-bottom: calc(var(--bottom-nav-space) + 2rem);
+  }
+  .bottom-above-nav {
+    bottom: calc(var(--bottom-nav-space) + 1rem);
   }
   /* 触控优化 */
   .touch-target {

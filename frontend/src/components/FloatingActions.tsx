@@ -81,7 +81,7 @@ export const FloatingActions: React.FC<Props> = ({ onUpdate, autoCheckinEnabled 
       )}
 
       {/* 悬浮按钮组 */}
-      <div className="fixed right-4 bottom-24 z-50 flex flex-col items-end gap-3 pointer-events-none">
+      <div className="fixed right-4 bottom-above-nav z-50 flex flex-col items-end gap-3 pointer-events-none">
         {/* 展开的操作按钮 */}
         <div className={`flex flex-col gap-3 transition-all duration-300 ease-out ${
           isOpen

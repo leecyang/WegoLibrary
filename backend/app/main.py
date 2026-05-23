@@ -112,6 +112,10 @@ class UpdateAnnouncementDraftRequest(BaseModel):
     content: str = ""
 
 ANNOUNCEMENT_MAX_LENGTH = 2000
+WECHAT_CONNECT_HELP_TEXT = (
+    "微信连接失败。请先确认：1. 今天已经打开过“我去图书馆”小程序页面；"
+    "2. 回到微信重新授权后，再复制新的回调链接粘贴。"
+)
 WECHAT_AVATAR_ALLOWED_HOSTS = {
     "static.wechat.v2.traceint.com",
     "wechat.v2.traceint.com",
@@ -271,18 +275,18 @@ def parse_sessionid(req: ParseSessionIdRequest, current_user: User = Depends(get
     try:
         parse_code_from_url(url)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise HTTPException(status_code=400, detail=WECHAT_CONNECT_HELP_TEXT) from exc
 
     try:
         session_id, profile_snapshot, warning = parse_url_to_session_and_profile(url)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise HTTPException(status_code=400, detail=WECHAT_CONNECT_HELP_TEXT) from exc
     except Exception as exc:
         import logging
         logging.getLogger(__name__).exception("parse-sessionid 未处理异常")
         raise HTTPException(
             status_code=400,
-            detail="授权链接处理失败，请稍后重试；若持续失败请重新扫码并尽快粘贴最新链接",
+            detail=WECHAT_CONNECT_HELP_TEXT,
         ) from exc
 
     profile_response = _snapshot_to_response_dict(profile_snapshot) if profile_snapshot else None

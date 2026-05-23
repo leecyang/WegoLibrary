@@ -26,6 +26,7 @@ interface CollapsibleCardProps {
   trailing?: ReactNode;
   children: ReactNode;
   contentClassName?: string;
+  locked?: boolean;
 }
 
 const CollapsibleCard: React.FC<CollapsibleCardProps> = ({
@@ -36,13 +37,17 @@ const CollapsibleCard: React.FC<CollapsibleCardProps> = ({
   trailing,
   children,
   contentClassName = 'p-6 space-y-6',
+  locked = false,
 }) => (
   <div className="glass-card overflow-hidden shrink-0">
     <button
       type="button"
       onClick={onToggle}
       aria-expanded={expanded}
-      className="w-full p-4 flex items-center justify-between gap-3 bg-white/50 hover:bg-white/70 transition-colors text-left"
+      className={clsx(
+        'w-full p-4 flex items-center justify-between gap-3 bg-white/50 transition-colors text-left',
+        locked ? 'cursor-default' : 'hover:bg-white/70 cursor-pointer',
+      )}
     >
       <h2 className="text-base font-semibold text-slate-800 flex items-center gap-2 min-w-0">
         {icon}
@@ -50,12 +55,14 @@ const CollapsibleCard: React.FC<CollapsibleCardProps> = ({
       </h2>
       <div className="flex items-center gap-2 shrink-0">
         {trailing}
-        <ChevronDown
-          className={clsx(
-            'w-5 h-5 text-slate-400 transition-transform duration-300',
-            expanded && 'rotate-180',
-          )}
-        />
+        {!locked && (
+          <ChevronDown
+            className={clsx(
+              'w-5 h-5 text-slate-400 transition-transform duration-300',
+              expanded && 'rotate-180',
+            )}
+          />
+        )}
       </div>
     </button>
     <div
@@ -86,27 +93,27 @@ export const ConfigTab: React.FC<Props> = ({ currentData, onUpdate }) => {
   
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
-  const [wechatExpanded, setWechatExpanded] = useState(true);
+  const [wechatExpanded, setWechatExpanded] = useState(false);
   const [settingsExpanded, setSettingsExpanded] = useState(false);
-  const wechatExpandKeyRef = useRef<string | null>(null);
+  const previousWechatStatusRef = useRef<string | undefined>(undefined);
 
-  // 连接微信：未连接或已过期默认展开，已连接默认折叠；参数设置始终默认折叠
+  const wechatStatus = currentData?.wechat_connection_status;
+  const wechatMustStayOpen =
+    !currentData?.is_configured || wechatStatus === 'disconnected' || wechatStatus === 'expired';
+  const wechatLocked = wechatMustStayOpen;
+
+  // 连接微信：未连接/过期强制展开；进入已连接时默认折叠，但允许手动展开。
   useEffect(() => {
-    if (!currentData) return;
-    const configured = currentData.is_configured;
-    const expired = currentData.wechat_connection_status === 'expired';
-    const shouldExpand = !configured || expired;
-    const expandKey = `${configured}:${currentData.wechat_connection_status ?? ''}`;
-    if (wechatExpandKeyRef.current === null) {
-      setWechatExpanded(shouldExpand);
-      wechatExpandKeyRef.current = expandKey;
-      return;
+    if (wechatMustStayOpen) {
+      setWechatExpanded(true);
+    } else if (
+      wechatStatus === 'connected'
+      && previousWechatStatusRef.current !== 'connected'
+    ) {
+      setWechatExpanded(false);
     }
-    if (wechatExpandKeyRef.current !== expandKey) {
-      setWechatExpanded(shouldExpand);
-      wechatExpandKeyRef.current = expandKey;
-    }
-  }, [currentData]);
+    previousWechatStatusRef.current = wechatStatus;
+  }, [wechatMustStayOpen, wechatStatus]);
 
   const parseBeaconValue = (raw: string, fallback: number) => {
     const trimmed = (raw ?? '').trim();
@@ -200,6 +207,9 @@ export const ConfigTab: React.FC<Props> = ({ currentData, onUpdate }) => {
         msg = '无法读取剪贴板，请手动粘贴';
         setShowLinkInput(true);
       }
+      if (msg.includes('微信连接失败')) {
+        setShowLinkInput(true);
+      }
       setMessage({ type: 'error', text: msg });
     } finally {
       setLoading(false);
@@ -218,6 +228,9 @@ export const ConfigTab: React.FC<Props> = ({ currentData, onUpdate }) => {
       const detail = axiosErr.response?.data?.detail;
       if (typeof detail === 'string') msg = detail;
       else if (Array.isArray(detail)) msg = detail.map((d) => d?.msg || String(d)).join('; ');
+      if (msg.includes('微信连接失败')) {
+        setShowLinkInput(true);
+      }
       setMessage({ type: 'error', text: msg });
     } finally {
       setLoading(false);
@@ -246,7 +259,7 @@ export const ConfigTab: React.FC<Props> = ({ currentData, onUpdate }) => {
   const wechatBadge = getWechatConnectionBadge(currentData?.wechat_connection_status);
 
   return (
-    <div className="h-full flex flex-col px-4 pt-4 pb-32 animate-fade-in space-y-4 overflow-y-auto scrollbar-none">
+    <div className="h-full flex flex-col px-4 pt-4 pb-bottom-nav animate-fade-in space-y-4 overflow-y-auto scrollbar-none">
 
       <WechatProfileCard
         profileDisplay={currentData?.profile_display ?? (currentData?.is_configured ? 'pending' : 'none')}
@@ -257,7 +270,12 @@ export const ConfigTab: React.FC<Props> = ({ currentData, onUpdate }) => {
         title="连接微信"
         icon={<QrCode className="w-5 h-5 text-primary shrink-0" />}
         expanded={wechatExpanded}
-        onToggle={() => setWechatExpanded((v) => !v)}
+        onToggle={() => {
+          if (!wechatLocked) {
+            setWechatExpanded((v) => !v);
+          }
+        }}
+        locked={wechatLocked}
         trailing={
           wechatBadge ? (
             <span className={wechatBadge.className}>
