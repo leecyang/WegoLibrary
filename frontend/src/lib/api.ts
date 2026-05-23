@@ -19,6 +19,24 @@ export interface User {
   created_at: string;
 }
 
+export type ProfileDisplay = 'none' | 'pending' | 'ready';
+
+export type WechatConnectionStatus =
+  | 'disconnected'
+  | 'connected'
+  | 'expired'
+  | 'unauthorized';
+
+export interface WechatProfile {
+  nick?: string | null;
+  avatar?: string | null;
+  student_name?: string | null;
+  student_no?: string | null;
+  sch?: string | null;
+  area_name?: string | null;
+  traceint_user_id?: number | null;
+}
+
 export interface StatusData {
   is_configured: boolean;
   session_id_preview: string;
@@ -29,6 +47,9 @@ export interface StatusData {
   last_checkin: string;
   last_checkin_result: string;
   auto_checkin_enabled?: boolean;
+  profile_display?: ProfileDisplay;
+  wechat_profile?: WechatProfile | null;
+  wechat_connection_status?: WechatConnectionStatus;
 }
 
 export interface AnnouncementData {
@@ -55,6 +76,29 @@ export interface AdminUserConfig {
   is_configured: boolean;
   last_checkin: string;
   status: string;
+  profile_display?: ProfileDisplay;
+  wechat_nick?: string | null;
+  wechat_student_name?: string | null;
+  wechat_student_no?: string | null;
+  wechat_sch?: string | null;
+  wechat_avatar?: string | null;
+}
+
+export interface WechatProfilePayload {
+  traceint_user_id?: number | null;
+  nick?: string | null;
+  avatar?: string | null;
+  student_name?: string | null;
+  student_no?: string | null;
+  sch?: string | null;
+  area_name?: string | null;
+  fetched_at?: string | null;
+}
+
+export interface ParseSessionIdResponse {
+  session_id: string;
+  profile: WechatProfilePayload | null;
+  warning?: string | null;
 }
 
 // ============ Auth API ============
@@ -96,18 +140,36 @@ export const getAnnouncement = async () => {
   return res.data;
 };
 
-export const updateConfig = async (session_id: string, venueMajor: number, venueMinor: number) => {
-  const res = await api.post('/config', { session_id, venue_major: venueMajor, venue_minor: venueMinor });
+export const updateConfig = async (
+  session_id: string,
+  venueMajor: number,
+  venueMinor: number,
+  profile?: WechatProfilePayload | null,
+) => {
+  const body: Record<string, unknown> = {
+    session_id,
+    venue_major: venueMajor,
+    venue_minor: venueMinor,
+  };
+  if (profile) {
+    body.profile = profile;
+  }
+  const res = await api.post('/config', body);
   return res.data;
 };
 
 export const parseSessionIdFromUrl = async (url: string) => {
-  const res = await api.post<{ session_id: string }>('/parse-sessionid', { url });
+  const res = await api.post<ParseSessionIdResponse>('/parse-sessionid', { url });
   return res.data;
 };
 
+export interface CheckInResult {
+  success: boolean;
+  message: string;
+}
+
 export const triggerCheckIn = async () => {
-  const res = await api.post('/checkin');
+  const res = await api.post<CheckInResult>('/checkin');
   return res.data;
 };
 

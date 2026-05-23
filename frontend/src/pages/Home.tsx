@@ -107,7 +107,12 @@ function Home() {
             </div>
             <div>
               <h1 className="text-lg font-bold text-slate-800 tracking-tight">图书馆助手</h1>
-              <p className="text-xs text-slate-500 mt-0.5">你好, {user?.username}</p>
+              <p className="text-xs text-slate-500 mt-0.5">
+                你好,{' '}
+                {status?.profile_display === 'ready' && status?.wechat_profile?.nick
+                  ? status.wechat_profile.nick
+                  : user?.username}
+              </p>
             </div>
           </div>
           <div className="flex gap-2">

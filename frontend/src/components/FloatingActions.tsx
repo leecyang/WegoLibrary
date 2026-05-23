@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { MapPin, RefreshCw, X, Zap } from 'lucide-react';
 import { triggerCheckIn, enableAutoCheckIn, disableAutoCheckIn } from '../lib/api';
+import { formatCheckinResultMessage } from '../lib/checkinMessage';
 
 interface Props {
   onUpdate: () => void;
@@ -21,9 +22,14 @@ export const FloatingActions: React.FC<Props> = ({ onUpdate, autoCheckinEnabled 
   const handleCheckIn = async () => {
     setLoadingCheckIn(true);
     try {
-      await triggerCheckIn();
+      const result = await triggerCheckIn();
       onUpdate();
-      showFeedback('success', '签到成功');
+      if (result.success) {
+        const text = formatCheckinResultMessage(result.message || '') || '签到成功';
+        showFeedback('success', text.includes('成功') ? text : '签到成功');
+      } else {
+        showFeedback('danger', formatCheckinResultMessage(result.message || '') || '签到失败');
+      }
     } catch {
       showFeedback('danger', '签到失败');
     } finally {

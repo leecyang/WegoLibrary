@@ -38,6 +38,15 @@ class Config(SQLModel, table=True):
     last_log: Optional[str] = None
     created_at: Optional[datetime] = Field(default_factory=datetime.now)
     auto_checkin_expire_at: Optional[datetime] = None
+    # 微信个人资料快照（粘贴授权链接时一次性写入，不做动态刷新）
+    wechat_nick: Optional[str] = None
+    wechat_avatar: Optional[str] = None
+    wechat_student_name: Optional[str] = None
+    wechat_student_no: Optional[str] = None
+    wechat_sch: Optional[str] = None
+    wechat_area_name: Optional[str] = None
+    traceint_user_id: Optional[int] = None
+    wechat_profile_at: Optional[datetime] = None
 
 class Announcement(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
@@ -98,6 +107,21 @@ def create_db_and_tables():
                 if "auto_checkin_expire_at" not in columns:
                     print("Migrating: Adding auto_checkin_expire_at column to config table")
                     conn.execute(text("ALTER TABLE config ADD COLUMN auto_checkin_expire_at DATETIME"))
+
+                profile_columns = {
+                    "wechat_nick": "VARCHAR",
+                    "wechat_avatar": "VARCHAR",
+                    "wechat_student_name": "VARCHAR",
+                    "wechat_student_no": "VARCHAR",
+                    "wechat_sch": "VARCHAR",
+                    "wechat_area_name": "VARCHAR",
+                    "traceint_user_id": "INTEGER",
+                    "wechat_profile_at": "DATETIME",
+                }
+                for col_name, col_type in profile_columns.items():
+                    if col_name not in columns:
+                        print(f"Migrating: Adding {col_name} column to config table")
+                        conn.execute(text(f"ALTER TABLE config ADD COLUMN {col_name} {col_type}"))
 
             # 确保 User 表存在（SQLModel.metadata.create_all 应该已经创建了，但如果是新加的可能需要检查）
             
@@ -175,14 +199,103 @@ def get_all_active_configs(session: Session) -> List[Config]:
     statement = select(Config).where(Config.is_active == True)
     return list(session.exec(statement).all())
 
+def apply_wechat_profile_to_config(config: Config, profile: dict) -> None:
+    """将 profile 字典写入 Config 快照字段。"""
+    config.wechat_nick = profile.get("nick")
+    config.wechat_avatar = profile.get("avatar")
+    config.wechat_student_name = profile.get("student_name")
+    config.wechat_student_no = profile.get("student_no")
+    config.wechat_sch = profile.get("sch")
+    config.wechat_area_name = profile.get("area_name")
+    raw_uid = profile.get("traceint_user_id")
+    if raw_uid is not None:
+        try:
+            config.traceint_user_id = int(raw_uid)
+        except (TypeError, ValueError):
+            config.traceint_user_id = None
+    else:
+        config.traceint_user_id = None
+    fetched_at = profile.get("fetched_at")
+    if isinstance(fetched_at, datetime):
+        config.wechat_profile_at = fetched_at
+    elif isinstance(fetched_at, str):
+        try:
+            config.wechat_profile_at = datetime.fromisoformat(fetched_at)
+        except ValueError:
+            config.wechat_profile_at = datetime.now()
+    else:
+        config.wechat_profile_at = datetime.now()
+
+
+def get_profile_display(config: Optional[Config]) -> str:
+    """返回 profile 展示状态: none | pending | ready"""
+    if not config or not (config.session_id or "").strip():
+        return "none"
+    if config.wechat_profile_at and config.wechat_nick:
+        return "ready"
+    return "pending"
+
+
+# 登录态失效类错误（签到 Session 过期）
+_WECHAT_SESSION_EXPIRED_MARKERS = (
+    "登录状态已经失效",
+    "无法重新登录",
+    "登录状态已经失效无法重新登录",
+)
+
+
+def get_wechat_connection_status(config: Optional[Config]) -> str:
+    """
+    微信连接展示状态:
+    - disconnected: 未配置 session
+    - connected: 正常
+    - expired: 登录态已失效（需重新授权）
+    - unauthorized: 其他鉴权/签到失败
+    """
+    if not config or not (config.session_id or "").strip():
+        return "disconnected"
+
+    checkin_result = config.last_checkin_result or ""
+    last_log = config.last_log or ""
+    combined = f"{checkin_result} {last_log}"
+
+    if any(marker in combined for marker in _WECHAT_SESSION_EXPIRED_MARKERS):
+        return "expired"
+
+    if checkin_result.startswith("签到失败"):
+        return "unauthorized"
+
+    if last_log and "KeepAlive" in last_log and "success" not in last_log.lower():
+        if any(marker in last_log for marker in _WECHAT_SESSION_EXPIRED_MARKERS):
+            return "expired"
+
+    return "connected"
+
+
+def build_wechat_profile_response(config: Optional[Config]) -> Optional[dict]:
+    """构建 API 返回的 wechat_profile 对象。"""
+    if get_profile_display(config) != "ready" or not config:
+        return None
+    return {
+        "nick": config.wechat_nick,
+        "avatar": config.wechat_avatar,
+        "student_name": config.wechat_student_name,
+        "student_no": config.wechat_student_no,
+        "sch": config.wechat_sch,
+        "area_name": config.wechat_area_name,
+        "traceint_user_id": config.traceint_user_id,
+    }
+
+
 def update_config_by_owner(
     session: Session,
     owner_id: int,
     session_id: str,
     major: int,
-    minor: int
+    minor: int,
+    profile: Optional[dict] = None,
 ) -> Config:
-    """更新或创建用户配置"""
+    """更新或创建用户配置；profile 非 None 时写入微信资料快照。"""
     config = get_config_by_owner(session, owner_id)
     if not config:
         config = Config(
@@ -198,6 +311,8 @@ def update_config_by_owner(
         config.major = major
         config.minor = minor
         config.is_active = True
+    if profile is not None:
+        apply_wechat_profile_to_config(config, profile)
     session.commit()
     session.refresh(config)
     return config

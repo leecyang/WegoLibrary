@@ -2,10 +2,7 @@ from fastapi import FastAPI, Depends, HTTPException, Request, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordRequestForm
 from pydantic import BaseModel
-from typing import Optional, List
-import urllib.parse
-import requests
-import re
+from typing import Optional, List, Any
 from sqlmodel import Session
 from datetime import timedelta, datetime
 from contextlib import asynccontextmanager
@@ -15,8 +12,10 @@ from app.database import (
     get_config_by_owner, update_config_by_owner,
     log_checkin_by_owner, log_keepalive_by_owner,
     create_user, get_user_by_username, get_all_configs, delete_user,
-    get_all_users, get_announcement, get_or_create_announcement
+    get_all_users, get_announcement, get_or_create_announcement,
+    get_profile_display, build_wechat_profile_response, get_wechat_connection_status,
 )
+from app.traceint_client import parse_url_to_session_and_profile, parse_code_from_url
 from app.scheduler import start_scheduler, shutdown_scheduler, keep_alive_for_user, start_auto_checkin_for_user, stop_auto_checkin_for_user
 from app.core import WegolibCore
 from app.auth import (
@@ -61,12 +60,23 @@ class Token(BaseModel):
     access_token: str
     token_type: str
 
+class WechatProfilePayload(BaseModel):
+    traceint_user_id: Optional[int] = None
+    nick: Optional[str] = None
+    avatar: Optional[str] = None
+    student_name: Optional[str] = None
+    student_no: Optional[str] = None
+    sch: Optional[str] = None
+    area_name: Optional[str] = None
+    fetched_at: Optional[str] = None
+
 class ConfigRequest(BaseModel):
     session_id: Optional[str] = None
     major: Optional[int] = None
     minor: Optional[int] = None
     venue_major: Optional[int] = None
     venue_minor: Optional[int] = None
+    profile: Optional[WechatProfilePayload] = None
 
 class ParseSessionIdRequest(BaseModel):
     url: str
@@ -77,6 +87,12 @@ class AdminUserConfigResponse(BaseModel):
     is_configured: bool
     last_checkin: str
     status: str # "Active" or "Inactive"
+    profile_display: str = "none"
+    wechat_nick: Optional[str] = None
+    wechat_student_name: Optional[str] = None
+    wechat_student_no: Optional[str] = None
+    wechat_sch: Optional[str] = None
+    wechat_avatar: Optional[str] = None
 
 class AnnouncementResponse(BaseModel):
     has_announcement: bool
@@ -169,11 +185,19 @@ def logout(
 
 # ============ Business Routes ============
 
-def _extract_wechat_sess_id_from_set_cookie(set_cookie: Optional[str]) -> Optional[str]:
-    if not set_cookie:
+def _profile_payload_to_dict(profile: Optional[WechatProfilePayload]) -> Optional[dict[str, Any]]:
+    if profile is None:
         return None
-    m = re.search(r"(?i)wechatSESS_ID=([^;,\s]+)", set_cookie)
-    return m.group(1) if m else None
+    data = profile.model_dump(exclude_none=True)
+    if not data.get("nick"):
+        return None
+    return data
+
+def _snapshot_to_response_dict(snapshot) -> dict[str, Any]:
+    if snapshot is None:
+        return {}
+    data = snapshot.to_dict()
+    return data
 
 def _format_datetime(value: Optional[datetime]) -> Optional[str]:
     return value.strftime("%Y-%m-%d %H:%M:%S") if value else None
@@ -215,74 +239,35 @@ def _build_admin_announcement_response(announcement: Optional[Announcement]) -> 
         published_at=_format_datetime(announcement.published_at),
     )
 
-def _extract_wechat_sess_id_from_response(resp: requests.Response) -> Optional[str]:
-    sid = resp.cookies.get("wechatSESS_ID")
-    if sid:
-        return sid
-    return _extract_wechat_sess_id_from_set_cookie(resp.headers.get("set-cookie"))
-
 @app.post("/api/parse-sessionid")
 def parse_sessionid(req: ParseSessionIdRequest, current_user: User = Depends(get_current_user)):
     url = (req.url or "").strip()
     if not url:
         raise HTTPException(status_code=400, detail="url 不能为空")
 
-    query = urllib.parse.urlparse(url).query
-    query_params = urllib.parse.parse_qs(query)
-    codes = query_params.get("code")
-    if not codes:
-        raise HTTPException(status_code=400, detail="链接中未找到 code 参数")
-
-    code = codes[-1]
-    
-    state = "1"
-    states = query_params.get("state")
-    if states and states[-1]:
-        state = states[-1]
-    
-    data = {"r": "https://web.traceint.com/web/index.html", "code": code, "state": state}
-
-    session = requests.Session()
+    try:
+        parse_code_from_url(url)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     try:
-        r = session.get(
-            "https://wechat.v2.traceint.com/index.php/wxApp/wechatAuth.html",
-            params=data,
-            allow_redirects=False,
-            timeout=15,
-        )
-    except Exception:
-        raise HTTPException(status_code=400, detail="请求微信授权接口失败，请稍后重试")
-
-    wechat_sess_id = _extract_wechat_sess_id_from_response(r)
-
-    if not wechat_sess_id:
-        try:
-            r2 = session.get(
-                "https://wechat.v2.traceint.com/index.php/wxApp/wechatAuth.html",
-                params=data,
-                allow_redirects=True,
-                timeout=15,
-            )
-        except Exception:
-            r2 = None
-
-        if r2 is not None:
-            for resp in list(getattr(r2, "history", [])) + [r2]:
-                wechat_sess_id = _extract_wechat_sess_id_from_response(resp)
-                if wechat_sess_id:
-                    break
-
-        if not wechat_sess_id:
-            wechat_sess_id = session.cookies.get("wechatSESS_ID")
-
-    if not wechat_sess_id:
+        session_id, profile_snapshot, warning = parse_url_to_session_and_profile(url)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        import logging
+        logging.getLogger(__name__).exception("parse-sessionid 未处理异常")
         raise HTTPException(
             status_code=400,
-            detail="未能从链接解析出 wechatSESS_ID：请确认已在微信内完成登录；且该链接的 code 可能为一次性，需重新扫码/重新复制最新链接",
-        )
+            detail="授权链接处理失败，请稍后重试；若持续失败请重新扫码并尽快粘贴最新链接",
+        ) from exc
 
-    return {"session_id": f"wechatSESS_ID={wechat_sess_id}"}
+    profile_response = _snapshot_to_response_dict(profile_snapshot) if profile_snapshot else None
+    return {
+        "session_id": session_id,
+        "profile": profile_response,
+        "warning": warning,
+    }
 
 @app.get("/api/announcement", response_model=AnnouncementResponse)
 def get_public_announcement(current_user: User = Depends(get_current_user), session: Session = Depends(get_session)):
@@ -304,10 +289,14 @@ def get_status(current_user: User = Depends(get_current_user), session: Session 
             "last_checkin": "从未",
             "last_checkin_result": "",
             "auto_checkin_enabled": False,
+            "profile_display": "none",
+            "wechat_profile": None,
+            "wechat_connection_status": "disconnected",
         }
 
     now = datetime.now()
     auto_checkin_enabled = bool(config.auto_checkin_expire_at and config.auto_checkin_expire_at > now)
+    profile_display = get_profile_display(config)
 
     return {
         "is_configured": True,
@@ -319,6 +308,9 @@ def get_status(current_user: User = Depends(get_current_user), session: Session 
         "last_checkin": config.last_checkin.strftime("%Y-%m-%d %H:%M:%S") if config.last_checkin else "从未",
         "last_checkin_result": config.last_checkin_result or "",
         "auto_checkin_enabled": auto_checkin_enabled,
+        "profile_display": profile_display,
+        "wechat_profile": build_wechat_profile_response(config),
+        "wechat_connection_status": get_wechat_connection_status(config),
     }
 
 @app.post("/api/config")
@@ -339,9 +331,27 @@ def set_config(req: ConfigRequest, current_user: User = Depends(get_current_user
     if target_minor is None:
         target_minor = current.minor if current else 9
 
-    update_config_by_owner(session, current_user.id, session_id, int(target_major), int(target_minor))
-    # 为该用户触发一次保活验证
-    keep_alive_for_user(current_user.id)
+    profile_dict = _profile_payload_to_dict(req.profile)
+    try:
+        update_config_by_owner(
+            session,
+            current_user.id,
+            session_id,
+            int(target_major),
+            int(target_minor),
+            profile=profile_dict,
+        )
+    except Exception as exc:
+        import logging
+        logging.getLogger(__name__).exception("保存配置失败")
+        raise HTTPException(status_code=400, detail="保存配置失败，请重试") from exc
+
+    try:
+        keep_alive_for_user(current_user.id)
+    except Exception as exc:
+        import logging
+        logging.getLogger(__name__).warning("保存后保活失败: %s", exc)
+
     return {"message": "配置已保存"}
 
 @app.post("/api/checkin")
@@ -356,12 +366,13 @@ def trigger_checkin(current_user: User = Depends(get_current_user), session: Ses
 
     log_checkin_by_owner(session, current_user.id, result["success"], result["message"])
 
-    now = datetime.now()
-    expire_at = now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
-    config.auto_checkin_expire_at = expire_at
-    session.add(config)
-    session.commit()
-    start_auto_checkin_for_user(current_user.id, expire_at)
+    if result["success"]:
+        now = datetime.now()
+        expire_at = now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+        config.auto_checkin_expire_at = expire_at
+        session.add(config)
+        session.commit()
+        start_auto_checkin_for_user(current_user.id, expire_at)
 
     return result
 
@@ -466,6 +477,12 @@ def get_admin_users(admin: User = Depends(get_current_admin), session: Session =
             info["status"] = "活跃" if config.is_active else "未激活"
             if config.last_checkin:
                 info["last_checkin"] = config.last_checkin.strftime("%Y-%m-%d %H:%M:%S")
+            info["profile_display"] = get_profile_display(config)
+            info["wechat_nick"] = config.wechat_nick
+            info["wechat_student_name"] = config.wechat_student_name
+            info["wechat_student_no"] = config.wechat_student_no
+            info["wechat_sch"] = config.wechat_sch
+            info["wechat_avatar"] = config.wechat_avatar
         
         result.append(info)
     return result

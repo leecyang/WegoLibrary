@@ -288,20 +288,54 @@ export default function AdminDashboard() {
                 <table className="w-full text-left">
                   <thead className="bg-slate-50 border-b border-slate-100">
                     <tr>
-                      <th className="px-6 py-4 text-sm font-semibold text-slate-600">ID</th>
-                      <th className="px-6 py-4 text-sm font-semibold text-slate-600">用户名</th>
-                      <th className="px-6 py-4 text-sm font-semibold text-slate-600">配置状态</th>
-                      <th className="px-6 py-4 text-sm font-semibold text-slate-600">运行状态</th>
-                      <th className="px-6 py-4 text-sm font-semibold text-slate-600">最后签到</th>
-                      <th className="px-6 py-4 text-sm font-semibold text-slate-600 text-right">操作</th>
+                      <th className="px-4 py-4 text-sm font-semibold text-slate-600">ID</th>
+                      <th className="px-4 py-4 text-sm font-semibold text-slate-600">用户名</th>
+                      <th className="px-4 py-4 text-sm font-semibold text-slate-600">微信昵称</th>
+                      <th className="px-4 py-4 text-sm font-semibold text-slate-600">姓名/学号</th>
+                      <th className="px-4 py-4 text-sm font-semibold text-slate-600">校区</th>
+                      <th className="px-4 py-4 text-sm font-semibold text-slate-600">配置状态</th>
+                      <th className="px-4 py-4 text-sm font-semibold text-slate-600">运行状态</th>
+                      <th className="px-4 py-4 text-sm font-semibold text-slate-600">最后签到</th>
+                      <th className="px-4 py-4 text-sm font-semibold text-slate-600 text-right">操作</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
-                    {users.map((user) => (
+                    {users.map((user) => {
+                      const profileLabel =
+                        user.profile_display === 'ready'
+                          ? null
+                          : user.profile_display === 'pending'
+                            ? '待重新授权'
+                            : '—';
+                      const nameNo = [user.wechat_student_name, user.wechat_student_no]
+                        .filter(Boolean)
+                        .join(' / ');
+
+                      return (
                       <tr key={user.user_id} className="hover:bg-slate-50/50 transition-colors">
-                        <td className="px-6 py-4 text-sm text-slate-500">#{user.user_id}</td>
-                        <td className="px-6 py-4 text-sm font-medium text-slate-800">{user.username}</td>
-                        <td className="px-6 py-4">
+                        <td className="px-4 py-4 text-sm text-slate-500">#{user.user_id}</td>
+                        <td className="px-4 py-4 text-sm font-medium text-slate-800">{user.username}</td>
+                        <td className="px-4 py-4 text-sm text-slate-600">
+                          {user.profile_display === 'ready' && user.wechat_avatar ? (
+                            <div className="flex items-center gap-2">
+                              <img
+                                src={user.wechat_avatar}
+                                alt=""
+                                className="w-6 h-6 rounded-full object-cover border border-slate-200"
+                              />
+                              <span className="truncate max-w-[100px]">{user.wechat_nick || '—'}</span>
+                            </div>
+                          ) : (
+                            <span className="text-slate-400">{profileLabel ?? user.wechat_nick ?? '—'}</span>
+                          )}
+                        </td>
+                        <td className="px-4 py-4 text-sm text-slate-500 max-w-[120px] truncate">
+                          {user.profile_display === 'ready' ? (nameNo || '—') : profileLabel ?? '—'}
+                        </td>
+                        <td className="px-4 py-4 text-sm text-slate-500 max-w-[100px] truncate">
+                          {user.profile_display === 'ready' ? (user.wechat_sch || '—') : profileLabel ?? '—'}
+                        </td>
+                        <td className="px-4 py-4">
                           <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
                             user.is_configured
                               ? 'bg-green-50 text-green-700'
@@ -310,9 +344,9 @@ export default function AdminDashboard() {
                             {user.is_configured ? '已配置' : '未配置'}
                           </span>
                         </td>
-                        <td className="px-6 py-4 text-sm text-slate-500">{user.status}</td>
-                        <td className="px-6 py-4 text-sm text-slate-500">{user.last_checkin}</td>
-                        <td className="px-6 py-4 text-right">
+                        <td className="px-4 py-4 text-sm text-slate-500">{user.status}</td>
+                        <td className="px-4 py-4 text-sm text-slate-500 whitespace-nowrap">{user.last_checkin}</td>
+                        <td className="px-4 py-4 text-right">
                           <div className="flex justify-end gap-2">
                             <button
                               onClick={() => handleTrigger(user.user_id)}
@@ -332,10 +366,11 @@ export default function AdminDashboard() {
                           </div>
                         </td>
                       </tr>
-                    ))}
+                    );
+                    })}
                     {users.length === 0 && (
                       <tr>
-                        <td colSpan={6} className="px-6 py-12 text-center text-slate-400 text-sm">
+                        <td colSpan={9} className="px-6 py-12 text-center text-slate-400 text-sm">
                           暂无用户
                         </td>
                       </tr>

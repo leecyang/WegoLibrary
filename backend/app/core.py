@@ -9,6 +9,8 @@ from typing import Optional, Dict, Any
 from Crypto.Cipher import PKCS1_v1_5 as Cipher_pksc1_v1_5
 from Crypto.PublicKey import RSA
 
+from app.traceint_client import normalize_checkin_session_id
+
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -23,47 +25,63 @@ class WegolibCore:
     MINIPROGRAM_REFERER = "https://servicewechat.com/wx3b9352e6b254ed2b/25/page-frame.html"
 
     def __init__(self, session_id: str):
-        self.session_id = session_id
-        # Use iOS 18.7 / WeChat 8.0.67 fingerprint from HAR
-        self.headers = {
+        self.session_id = normalize_checkin_session_id(session_id)
+        self._base_headers = {
             'Host': 'wechat.v2.traceint.com',
             'Connection': 'keep-alive',
-            'Content-Type': 'application/x-www-form-urlencoded',
             'Accept': '*/*',
             'App-Version': '2.2.5',
-            'Sec-Fetch-Site': 'same-site',
-            'Priority': 'u=3, i',
             'Accept-Language': 'zh-CN,zh-Hans;q=0.9',
             'Accept-Encoding': 'gzip, deflate, br',
-            'Sec-Fetch-Mode': 'cors',
             'Origin': 'https://web.traceint.com',
             'Referer': self.MINIPROGRAM_REFERER,
-            'Sec-Fetch-Dest': 'empty',
             'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 MicroMessenger/8.0.67(0x18004239) NetType/WIFI Language/zh_CN',
-            'Cookie': self.session_id
         }
         self.session = requests.Session()
-        self.session.headers.update(self.headers)
+        self.session.headers.update(self._base_headers)
+
+    def _extract_wechat_sess_id(self) -> Optional[str]:
+        for part in self.session_id.split(';'):
+            part = part.strip()
+            if part.startswith('wechatSESS_ID='):
+                return part.split('=', 1)[1]
+        return None
+
+    def _wxapp_headers(self, *, with_cookie: bool = False) -> dict[str, str]:
+        headers = {
+            **self._base_headers,
+            'Content-Type': 'application/x-www-form-urlencoded',
+            'Sec-Fetch-Site': 'same-site',
+            'Sec-Fetch-Mode': 'cors',
+            'Sec-Fetch-Dest': 'empty',
+            'Priority': 'u=3, i',
+        }
+        if with_cookie and self.session_id:
+            headers['Cookie'] = self.session_id
+        return headers
 
     def _update_cookie(self, new_cookies: requests.cookies.RequestsCookieJar):
         """Update internal session ID from response cookies"""
         if not new_cookies:
             return
             
-        current_dict = {}
+        current_dict: dict[str, str] = {}
         if self.session_id:
             for part in self.session_id.split(';'):
                 if '=' in part:
                     k, v = part.strip().split('=', 1)
-                    current_dict[k] = v
+                    if k != 'Authorization':
+                        current_dict[k] = v
         
         new_dict = new_cookies.get_dict()
-        current_dict.update(new_dict)
+        for key, value in new_dict.items():
+            if key != 'Authorization':
+                current_dict[key] = value
         
-        # Reconstruct
-        self.session_id = '; '.join([f"{k}={v}" for k, v in current_dict.items()])
-        self.headers['Cookie'] = self.session_id
-        self.session.headers['Cookie'] = self.session_id
+        ordered = ['wechatSESS_ID', 'SERVERID']
+        self.session_id = '; '.join(
+            f"{k}={current_dict[k]}" for k in ordered if k in current_dict
+        )
         
         # Log if wechatSESS_ID changed
         if 'wechatSESS_ID' in new_dict:
@@ -82,13 +100,7 @@ class WegolibCore:
         }
         
         try:
-            # Extract pure ID for the body
-            sess_id_val = None
-            for part in self.session_id.split(';'):
-                if part.strip().startswith('wechatSESS_ID='):
-                    sess_id_val = part.strip().split('=', 1)[1]
-                    break
-            
+            sess_id_val = self._extract_wechat_sess_id()
             if not sess_id_val:
                 result["message"] = "Invalid Cookie: wechatSESS_ID not found"
                 return result
@@ -96,17 +108,19 @@ class WegolibCore:
             # Simulate delay
             time.sleep(random.uniform(0.5, 1.5))
             
-            # Post to devices.html
-            r = self.session.post(
+            # Post to devices.html（仅带 wechatSESS_ID Cookie，与 FuckLib 一致）
+            r = requests.post(
                 self.DEVICES_URL,
                 data={'t': sess_id_val},
-                timeout=10
+                headers=self._wxapp_headers(with_cookie=True),
+                timeout=10,
             )
             r.raise_for_status()
             
             # Update cookie
+            old_session_id = self.session_id
             new_cookie = self._update_cookie(r.cookies)
-            if new_cookie != self.session_id:
+            if new_cookie and new_cookie != old_session_id:
                 result["new_session_id"] = new_cookie
 
             data = r.json()
@@ -141,8 +155,10 @@ class WegolibCore:
         }
         
         try:
-            # 1. Get Time
-            r_time = self.session.get(self.GET_TIME_URL)
+            sign_headers = self._wxapp_headers(with_cookie=False)
+
+            # 1. Get Time（签到接口不传 Cookie，凭据走 POST body 的 t 字段）
+            r_time = requests.get(self.GET_TIME_URL, headers=sign_headers, timeout=10)
             r_time.raise_for_status()
             timestamp = r_time.text
             
@@ -150,12 +166,7 @@ class WegolibCore:
             password = self._encrypt(timestamp)
             
             # 3. Prepare Data
-            sess_id_val = None
-            for part in self.session_id.split(';'):
-                if part.strip().startswith('wechatSESS_ID='):
-                    sess_id_val = part.strip().split('=', 1)[1]
-                    break
-            
+            sess_id_val = self._extract_wechat_sess_id()
             if not sess_id_val:
                 result["message"] = "Invalid Cookie: wechatSESS_ID not found"
                 return result
@@ -176,7 +187,7 @@ class WegolibCore:
             }
             
             # 4. Post Sign
-            r = self.session.post(self.SIGN_URL, data=payload)
+            r = requests.post(self.SIGN_URL, data=payload, headers=sign_headers, timeout=15)
             
             try:
                 data = r.json()
@@ -193,7 +204,7 @@ class WegolibCore:
                     final_msg = "到馆验证成功"
                 result["message"] = f"签到成功：{final_msg}"
             else:
-                result["message"] = f"签到失败 ({code}): {msg}"
+                result["message"] = f"签到失败: {msg}"
                 
         except Exception as e:
             result["message"] = f"签到异常: {str(e)}"

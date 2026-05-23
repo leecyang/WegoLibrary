@@ -1,6 +1,7 @@
 import React from 'react';
 import { Activity, Clock, Server, CheckCircle2, XCircle, Wifi, WifiOff, Bluetooth, BluetoothOff } from 'lucide-react';
 import type { StatusData } from '../lib/api';
+import { formatCheckinResultDetail } from '../lib/checkinMessage';
 
 interface Props {
   data: StatusData | null;
@@ -28,15 +29,13 @@ export const StatusTab: React.FC<Props> = ({ data, loading }) => {
   }
 
   const isNever = (value: string) => value === 'Never' || value === '从未';
-  const isConfigured = data.is_configured;
   const major = data.venue_major ?? data.major;
   const minor = data.venue_minor ?? data.minor;
   const isBluetoothConfigured = major !== 0 && minor !== 0;
   const isSuccess = data.last_checkin_result?.includes('成功');
   const isAutoCheckinEnabled = !!data.auto_checkin_enabled;
-  const checkinResultText = (data.last_checkin_result || '')
-    .replace('签到成功:', '签到成功：')
-    .replace('扫码成功', '到馆验证成功');
+  const checkinResultText = formatCheckinResultDetail(data.last_checkin_result || '');
+  const isWechatOk = data.wechat_connection_status === 'connected';
 
   const formatTime = (value: string) => {
     if (isNever(value)) return '--:--';
@@ -55,7 +54,7 @@ export const StatusTab: React.FC<Props> = ({ data, loading }) => {
   };
 
   return (
-    <div className="h-full flex flex-col px-4 pt-4 pb-24 animate-fade-in gap-4 overflow-y-auto">
+    <div className="h-full flex flex-col px-4 pt-4 pb-24 animate-fade-in gap-4 overflow-y-auto scrollbar-none">
       {/* 主状态卡片 */}
       <div className="glass-card p-5">
         <div className="flex items-center justify-between mb-5">
@@ -129,23 +128,39 @@ export const StatusTab: React.FC<Props> = ({ data, loading }) => {
       {/* 连接状态指示 */}
       <div className="glass-card-interactive p-4 flex items-center gap-4">
         <div className={`w-12 h-12 rounded-2xl flex items-center justify-center ${
-          isConfigured ? 'bg-success-light' : 'bg-slate-100'
+          isWechatOk ? 'bg-success-light' : data.wechat_connection_status === 'expired' ? 'bg-warning-light' : data.wechat_connection_status === 'unauthorized' ? 'bg-danger-light' : 'bg-slate-100'
         }`}>
-          {isConfigured ? (
+          {isWechatOk ? (
             <Wifi className="w-6 h-6 text-success" />
+          ) : data.wechat_connection_status === 'expired' ? (
+            <Wifi className="w-6 h-6 text-warning" />
+          ) : data.wechat_connection_status === 'unauthorized' ? (
+            <WifiOff className="w-6 h-6 text-danger" />
           ) : (
             <WifiOff className="w-6 h-6 text-slate-400" />
           )}
         </div>
         <div className="flex-1">
           <div className="text-sm font-semibold text-slate-800">
-            {isConfigured ? '微信已连接' : '微信未连接'}
+            {isWechatOk
+              ? '微信已连接'
+              : data.wechat_connection_status === 'expired'
+                ? '微信登录已过期'
+                : data.wechat_connection_status === 'unauthorized'
+                  ? '微信未授权'
+                  : '微信未连接'}
           </div>
           <div className="text-xs text-slate-500 mt-0.5">
-            {isConfigured ? '补签开启后将自动执行蓝牙补签' : '请前往「配置」页面扫码绑定'}
+            {isWechatOk
+              ? '补签开启后将自动执行蓝牙补签'
+              : data.wechat_connection_status === 'expired'
+                ? '请前往「配置」重新粘贴授权链接'
+                : '请前往「配置」页面扫码绑定'}
           </div>
         </div>
-        <div className={`w-2.5 h-2.5 rounded-full ${isConfigured ? 'bg-success' : 'bg-slate-300'}`} />
+        <div className={`w-2.5 h-2.5 rounded-full ${
+          isWechatOk ? 'bg-success' : data.wechat_connection_status === 'expired' ? 'bg-warning' : data.wechat_connection_status === 'unauthorized' ? 'bg-danger' : 'bg-slate-300'
+        }`} />
       </div>
 
       {/* 蓝牙配置状态指示 */}
