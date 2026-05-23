@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { User, UserCircle, AlertCircle } from 'lucide-react';
 import type { ProfileDisplay, WechatProfile } from '../lib/api';
 
@@ -12,6 +12,10 @@ export const WechatProfileCard: React.FC<Props> = ({
   profile,
 }) => {
   const [avatarError, setAvatarError] = useState(false);
+
+  useEffect(() => {
+    setAvatarError(false);
+  }, [profile?.avatar]);
 
   if (profileDisplay === 'none') {
     return (

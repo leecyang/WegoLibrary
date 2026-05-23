@@ -191,7 +191,7 @@ export const ConfigTab: React.FC<Props> = ({ currentData, onUpdate }) => {
 
     } catch (err: unknown) {
       const rawMessage = err instanceof Error ? err.message : '';
-      const axiosErr = err as AxiosError<{ detail?: string }>;
+      const axiosErr = err as AxiosError<{ detail?: string | { msg?: string }[] }>;
       let msg = rawMessage || '操作失败';
       const detail = axiosErr.response?.data?.detail;
       if (typeof detail === 'string') msg = detail;

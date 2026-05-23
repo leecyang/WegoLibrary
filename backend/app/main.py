@@ -6,6 +6,8 @@ from typing import Optional, List, Any
 from sqlmodel import Session
 from datetime import timedelta, datetime
 from contextlib import asynccontextmanager
+import urllib.parse
+import requests
 
 from app.database import (
     create_db_and_tables, User, Config, Announcement,
@@ -110,6 +112,10 @@ class UpdateAnnouncementDraftRequest(BaseModel):
     content: str = ""
 
 ANNOUNCEMENT_MAX_LENGTH = 2000
+WECHAT_AVATAR_ALLOWED_HOSTS = {
+    "static.wechat.v2.traceint.com",
+    "wechat.v2.traceint.com",
+}
 
 # ============ Auth Routes ============
 
@@ -199,6 +205,23 @@ def _snapshot_to_response_dict(snapshot) -> dict[str, Any]:
     data = snapshot.to_dict()
     return data
 
+def _proxied_wechat_avatar_url(avatar: Optional[str]) -> Optional[str]:
+    if not avatar:
+        return avatar
+    parsed = urllib.parse.urlparse(avatar)
+    if parsed.scheme not in {"http", "https"}:
+        return avatar
+    if parsed.hostname not in WECHAT_AVATAR_ALLOWED_HOSTS:
+        return avatar
+    return f"/api/wechat-avatar?url={urllib.parse.quote(avatar, safe='')}"
+
+def _proxy_wechat_profile_avatar(profile: Optional[dict]) -> Optional[dict]:
+    if not profile:
+        return profile
+    data = dict(profile)
+    data["avatar"] = _proxied_wechat_avatar_url(data.get("avatar"))
+    return data
+
 def _format_datetime(value: Optional[datetime]) -> Optional[str]:
     return value.strftime("%Y-%m-%d %H:%M:%S") if value else None
 
@@ -269,6 +292,39 @@ def parse_sessionid(req: ParseSessionIdRequest, current_user: User = Depends(get
         "warning": warning,
     }
 
+@app.get("/api/wechat-avatar")
+def proxy_wechat_avatar(url: str, current_user: User = Depends(get_current_user)):
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme not in {"http", "https"} or parsed.hostname not in WECHAT_AVATAR_ALLOWED_HOSTS:
+        raise HTTPException(status_code=400, detail="头像地址不允许代理")
+
+    try:
+        upstream = requests.get(
+            url,
+            headers={
+                "User-Agent": (
+                    "Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) "
+                    "AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 "
+                    "MicroMessenger/8.0.67(0x18004239) NetType/WIFI Language/zh_CN"
+                ),
+                "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+            },
+            timeout=15,
+        )
+        upstream.raise_for_status()
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail="头像获取失败") from exc
+
+    content_type = upstream.headers.get("content-type") or "application/octet-stream"
+    if not content_type.startswith("image/"):
+        raise HTTPException(status_code=502, detail="头像响应不是图片")
+
+    return Response(
+        content=upstream.content,
+        media_type=content_type,
+        headers={"Cache-Control": "private, max-age=3600"},
+    )
+
 @app.get("/api/announcement", response_model=AnnouncementResponse)
 def get_public_announcement(current_user: User = Depends(get_current_user), session: Session = Depends(get_session)):
     announcement = get_announcement(session)
@@ -309,7 +365,7 @@ def get_status(current_user: User = Depends(get_current_user), session: Session 
         "last_checkin_result": config.last_checkin_result or "",
         "auto_checkin_enabled": auto_checkin_enabled,
         "profile_display": profile_display,
-        "wechat_profile": build_wechat_profile_response(config),
+        "wechat_profile": _proxy_wechat_profile_avatar(build_wechat_profile_response(config)),
         "wechat_connection_status": get_wechat_connection_status(config),
     }
 
@@ -482,7 +538,7 @@ def get_admin_users(admin: User = Depends(get_current_admin), session: Session =
             info["wechat_student_name"] = config.wechat_student_name
             info["wechat_student_no"] = config.wechat_student_no
             info["wechat_sch"] = config.wechat_sch
-            info["wechat_avatar"] = config.wechat_avatar
+            info["wechat_avatar"] = _proxied_wechat_avatar_url(config.wechat_avatar)
         
         result.append(info)
     return result
