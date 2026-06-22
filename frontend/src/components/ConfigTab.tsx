@@ -473,8 +473,8 @@ export const ConfigTab: React.FC<Props> = ({ currentData, onUpdate }) => {
                 <div className="border-t border-slate-200 p-3 space-y-2">
                   {locationPresets.map((preset) => (
                     <div
-                      key={`${preset.school}-${preset.area_name}`}
-                      className="flex items-start justify-between gap-3 rounded-lg border border-slate-100 bg-white px-3 py-3"
+                      key={`${preset.school}-${preset.area_name || 'default'}`}
+                      className="flex items-center justify-between gap-3 rounded-lg border border-slate-100 bg-white px-3 py-3"
                     >
                       <div className="min-w-0 flex-1">
                         <div className="text-sm font-medium leading-6 text-slate-800 break-words">

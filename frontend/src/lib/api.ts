@@ -60,7 +60,7 @@ export interface AnnouncementData {
 
 export interface LocationPreset {
   school: string;
-  area_name: string;
+  area_name?: string | null;
   label: string;
   venue_major: number;
   venue_minor: number;

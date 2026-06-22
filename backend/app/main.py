@@ -117,7 +117,7 @@ class AdminAnnouncementResponse(BaseModel):
 
 class LocationPresetResponse(BaseModel):
     school: str
-    area_name: str
+    area_name: Optional[str] = None
     label: str
     venue_major: int
     venue_minor: int
@@ -492,7 +492,7 @@ def get_location_presets(
     for config in get_all_configs(session):
         school = (config.wechat_sch or "").strip()
         area_name = (config.wechat_area_name or "").strip()
-        if not school or not area_name:
+        if not school:
             continue
 
         try:
@@ -527,8 +527,8 @@ def get_location_presets(
         presets.append(
             LocationPresetResponse(
                 school=school,
-                area_name=area_name,
-                label=f"{school} · {area_name}",
+                area_name=area_name or None,
+                label=f"{school} · {area_name}" if area_name else school,
                 venue_major=venue_major,
                 venue_minor=venue_minor,
             )
