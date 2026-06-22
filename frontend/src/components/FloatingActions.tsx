@@ -1,4 +1,5 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
+import type { AxiosError } from 'axios';
 import { MapPin, RefreshCw, X, Zap } from 'lucide-react';
 import { triggerCheckIn, enableAutoCheckIn, disableAutoCheckIn } from '../lib/api';
 import { formatCheckinResultMessage } from '../lib/checkinMessage';
@@ -8,10 +9,15 @@ interface Props {
   autoCheckinEnabled?: boolean;
 }
 
+const CHECKIN_RATE_LIMIT_WINDOW_MS = 60_000;
+const CHECKIN_RATE_LIMIT_MAX_ATTEMPTS = 2;
+
 export const FloatingActions: React.FC<Props> = ({ onUpdate, autoCheckinEnabled = false }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [loadingCheckIn, setLoadingCheckIn] = useState(false);
   const [loadingAutoCheckin, setLoadingAutoCheckin] = useState(false);
+  const [checkInAttempts, setCheckInAttempts] = useState<number[]>([]);
+  const [checkInCooldownUntil, setCheckInCooldownUntil] = useState<number | null>(null);
   const [feedback, setFeedback] = useState<{ type: 'success' | 'danger'; text: string } | null>(null);
 
   const showFeedback = (type: 'success' | 'danger', text: string) => {
@@ -19,7 +25,55 @@ export const FloatingActions: React.FC<Props> = ({ onUpdate, autoCheckinEnabled 
     setTimeout(() => setFeedback(null), 2000);
   };
 
+  useEffect(() => {
+    if (!checkInCooldownUntil) return;
+
+    const delay = checkInCooldownUntil - Date.now();
+    if (delay <= 0) {
+      setCheckInCooldownUntil(null);
+      setCheckInAttempts((prev) => prev.filter((time) => Date.now() - time < CHECKIN_RATE_LIMIT_WINDOW_MS));
+      return;
+    }
+
+    const timer = window.setTimeout(() => {
+      setCheckInCooldownUntil(null);
+      setCheckInAttempts((prev) => prev.filter((time) => Date.now() - time < CHECKIN_RATE_LIMIT_WINDOW_MS));
+    }, delay);
+
+    return () => window.clearTimeout(timer);
+  }, [checkInCooldownUntil]);
+
+  const getErrorMessage = (error: unknown, fallback: string) => {
+    const axiosError = error as AxiosError<{ detail?: string }>;
+    return axiosError.response?.data?.detail || fallback;
+  };
+
+  const registerCheckInAttempt = () => {
+    const now = Date.now();
+    const recentAttempts = checkInAttempts.filter((time) => now - time < CHECKIN_RATE_LIMIT_WINDOW_MS);
+
+    if (recentAttempts.length >= CHECKIN_RATE_LIMIT_MAX_ATTEMPTS) {
+      const retryAt = Math.min(...recentAttempts) + CHECKIN_RATE_LIMIT_WINDOW_MS;
+      const retrySeconds = Math.max(1, Math.ceil((retryAt - now) / 1000));
+      setCheckInAttempts(recentAttempts);
+      setCheckInCooldownUntil(retryAt);
+      showFeedback('danger', `操作太频繁，请 ${retrySeconds} 秒后再试`);
+      return false;
+    }
+
+    const nextAttempts = [...recentAttempts, now];
+    setCheckInAttempts(nextAttempts);
+    if (nextAttempts.length >= CHECKIN_RATE_LIMIT_MAX_ATTEMPTS) {
+      setCheckInCooldownUntil(Math.min(...nextAttempts) + CHECKIN_RATE_LIMIT_WINDOW_MS);
+    }
+    return true;
+  };
+
+  const isCheckInRateLimited = checkInCooldownUntil !== null && checkInCooldownUntil > Date.now();
+
   const handleCheckIn = async () => {
+    if (loadingCheckIn || !registerCheckInAttempt()) return;
+
     setLoadingCheckIn(true);
     try {
       const result = await triggerCheckIn();
@@ -30,8 +84,8 @@ export const FloatingActions: React.FC<Props> = ({ onUpdate, autoCheckinEnabled 
       } else {
         showFeedback('danger', formatCheckinResultMessage(result.message || '') || '签到失败');
       }
-    } catch {
-      showFeedback('danger', '签到失败');
+    } catch (error) {
+      showFeedback('danger', formatCheckinResultMessage(getErrorMessage(error, '签到失败')) || '签到失败');
     } finally {
       setLoadingCheckIn(false);
       setIsOpen(false);
@@ -110,11 +164,12 @@ export const FloatingActions: React.FC<Props> = ({ onUpdate, autoCheckinEnabled 
           {/* 签到按钮 */}
           <button
             onClick={handleCheckIn}
-            disabled={loadingCheckIn}
-            className="flex items-center gap-2.5 pl-4 pr-3 py-3 bg-cta text-white rounded-2xl shadow-lg shadow-cta/30 active:scale-95 transition-all touch-manipulation touch-target select-none"
+            disabled={loadingCheckIn || isCheckInRateLimited}
+            className="flex items-center gap-2.5 pl-4 pr-3 py-3 bg-cta text-white rounded-2xl shadow-lg shadow-cta/30 active:scale-95 transition-all touch-manipulation touch-target select-none disabled:opacity-60 disabled:cursor-not-allowed disabled:active:scale-100"
             aria-label="立即签到"
+            title={isCheckInRateLimited ? '签到操作太频繁，请稍后再试' : '立即签到'}
           >
-            <span className="text-sm font-semibold">立即签到</span>
+            <span className="text-sm font-semibold">{isCheckInRateLimited ? '稍后再试' : '立即签到'}</span>
             <div className={`w-8 h-8 bg-white/20 rounded-xl flex items-center justify-center ${
               loadingCheckIn ? 'animate-pulse' : ''
             }`}>

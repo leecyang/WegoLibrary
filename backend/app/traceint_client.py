@@ -55,7 +55,19 @@ _VALIDATE_RETRIES = 4
 _VALIDATE_RETRY_DELAY_SEC = 2.0
 _DUAL_AUTH_DELAY_SEC = max(
     0.0,
-    int(os.getenv("TRACEINT_DUAL_AUTH_DELAY_MS", "1")) / 1000,
+    int(os.getenv("TRACEINT_DUAL_AUTH_DELAY_MS", "0")) / 1000,
+)
+_DUAL_SESSION_DELAY_SEC = max(
+    0.0,
+    int(os.getenv("TRACEINT_DUAL_SESSION_DELAY_MS", "0")) / 1000,
+)
+_DUAL_REQUEST_TIMEOUT_SEC = max(
+    3.0,
+    float(os.getenv("TRACEINT_DUAL_REQUEST_TIMEOUT_SEC", "12")),
+)
+_DUAL_NETWORK_RETRIES = max(
+    1,
+    int(os.getenv("TRACEINT_DUAL_NETWORK_RETRIES", "2")),
 )
 
 T = TypeVar("T")
@@ -155,6 +167,15 @@ class DualExchangeTicket:
     auth_session: requests.Session
     wechat_sess_id: str
     wechat_serverid: Optional[str]
+
+
+@dataclass
+class OAuthCookieResult:
+    value: Optional[str]
+    serverid: Optional[str]
+    status_code: Optional[int] = None
+    error_page: bool = False
+    error: Optional[BaseException] = None
 
 
 def parse_code_from_url(url: str) -> Tuple[str, str]:
@@ -293,6 +314,75 @@ def _build_oauth_params(code: str, state: str) -> dict[str, Any]:
     return {"r": REDIRECT_R, "code": code, "state": state_val}
 
 
+def _request_oauth_cookie_first_flight(
+    *,
+    session: requests.Session,
+    url: str,
+    params: dict[str, Any],
+    cookie_name: str,
+    action: str,
+    detect_wechat_auth_error: bool = False,
+) -> OAuthCookieResult:
+    """
+    双换票专用首包请求。
+
+    OAuth code 是一次性凭据，双换票时不能在同一端点内部继续做顺序 fallback。
+    这里只发出一个不跟随重定向的请求；只有在没有拿到任何 HTTP 响应的网络错误时才重试。
+    """
+    last_error: Optional[BaseException] = None
+    for attempt in range(_DUAL_NETWORK_RETRIES):
+        try:
+            resp = session.get(
+                url,
+                params=params,
+                allow_redirects=False,
+                timeout=_DUAL_REQUEST_TIMEOUT_SEC,
+            )
+        except _RETRYABLE_REQUEST_ERRORS as exc:
+            last_error = exc
+            logger.warning(
+                "%s 首包网络错误 (attempt %s/%s): %s",
+                action,
+                attempt + 1,
+                _DUAL_NETWORK_RETRIES,
+                exc,
+            )
+            if attempt + 1 < _DUAL_NETWORK_RETRIES:
+                time.sleep(0.08 * (attempt + 1))
+            continue
+        except Exception as exc:
+            logger.warning("%s 首包请求失败: %s", action, exc)
+            return OAuthCookieResult(
+                value=None,
+                serverid=session.cookies.get("SERVERID"),
+                error=exc,
+            )
+
+        error_page = detect_wechat_auth_error and _wechat_auth_response_has_error(resp)
+        value = _collect_cookie_value(session, resp, cookie_name)
+        serverid = _collect_cookie_value(session, resp, "SERVERID")
+        logger.info(
+            "%s 首包完成 status=%s has_%s=%s error_page=%s",
+            action,
+            resp.status_code,
+            cookie_name,
+            bool(value),
+            error_page,
+        )
+        return OAuthCookieResult(
+            value=value,
+            serverid=serverid,
+            status_code=resp.status_code,
+            error_page=error_page,
+        )
+
+    return OAuthCookieResult(
+        value=None,
+        serverid=session.cookies.get("SERVERID"),
+        error=last_error,
+    )
+
+
 def exchange_authorization(
     code: str,
     state: str = "1",
@@ -397,16 +487,34 @@ def exchange_dual_authorization_and_session(
     _prewarm_session(auth_session, GRAPHQL_URL)
     _prewarm_session(wechat_session, GET_TIME_URL)
     start_barrier = threading.Barrier(2)
+    params = _build_oauth_params(code, state)
+    auth_result: Optional[OAuthCookieResult] = None
+    sess_result: Optional[OAuthCookieResult] = None
 
-    def _exchange_authorization_raced() -> Tuple[Optional[str], Optional[str]]:
+    def _exchange_authorization_raced() -> OAuthCookieResult:
         start_barrier.wait()
         if _DUAL_AUTH_DELAY_SEC:
             time.sleep(_DUAL_AUTH_DELAY_SEC)
-        return exchange_authorization(code, state, auth_session)
+        return _request_oauth_cookie_first_flight(
+            session=auth_session,
+            url=AUTH_HTML_URL,
+            params=params,
+            cookie_name="Authorization",
+            action="auth.html",
+        )
 
-    def _exchange_wechat_sess_id_raced() -> str:
+    def _exchange_wechat_sess_id_raced() -> OAuthCookieResult:
         start_barrier.wait()
-        return exchange_wechat_sess_id(code, state, wechat_session)
+        if _DUAL_SESSION_DELAY_SEC:
+            time.sleep(_DUAL_SESSION_DELAY_SEC)
+        return _request_oauth_cookie_first_flight(
+            session=wechat_session,
+            url=WECHAT_AUTH_URL,
+            params=params,
+            cookie_name="wechatSESS_ID",
+            action="wechatAuth.html",
+            detect_wechat_auth_error=True,
+        )
 
     with ThreadPoolExecutor(max_workers=2) as executor:
         sess_future = executor.submit(
@@ -419,27 +527,38 @@ def exchange_dual_authorization_and_session(
         sess_error: Optional[BaseException] = None
 
         try:
-            authorization, auth_serverid = auth_future.result()
+            auth_result = auth_future.result()
+            authorization = auth_result.value
+            auth_serverid = auth_result.serverid
+            auth_error = auth_result.error
         except BaseException as exc:
             authorization, auth_serverid = None, None
             auth_error = exc
 
         try:
-            wechat_sess_id = sess_future.result()
+            sess_result = sess_future.result()
+            wechat_sess_id = sess_result.value
+            sess_error = sess_result.error
+            if sess_result.error_page:
+                sess_error = ValueError("Traceint 返回授权错误页，code 可能已被提前消耗")
         except BaseException as exc:
             wechat_sess_id = None
             sess_error = exc
 
-    wechat_serverid = wechat_session.cookies.get("SERVERID")
+    wechat_serverid = (sess_result.serverid if sess_result else None) or wechat_session.cookies.get("SERVERID")
 
     if not authorization or not wechat_sess_id:
         details: list[str] = []
         if not authorization:
             details.append("JWT 未换到")
+            if auth_result and auth_result.status_code:
+                details.append(f"auth status={auth_result.status_code}")
             if auth_error:
                 details.append(str(auth_error))
         if not wechat_sess_id:
             details.append("签到 Session 未换到")
+            if sess_result and sess_result.status_code:
+                details.append(f"wechatAuth status={sess_result.status_code}")
             if sess_error:
                 details.append(str(sess_error))
         raise ValueError(
@@ -714,3 +833,30 @@ def parse_url_to_session_and_profile(
     session_id = build_checkin_session_id(wechat_sess_id, wechat_serverid)
     warning = " ".join(warnings) if warnings else None
     return session_id, profile, warning
+
+
+def parse_url_to_authorization_and_profile(
+    url: str,
+) -> Tuple[str, Optional[str], Optional[WechatProfileSnapshot], Optional[str]]:
+    """两步授权第一阶段：单独使用一条 code 换取 JWT Cookie 与资料快照。"""
+    code, state = parse_code_from_url(url)
+    auth_session = _traceint_session()
+    _prewarm_session(auth_session, GRAPHQL_URL)
+    authorization, serverid = exchange_authorization(code, state, auth_session)
+    if not authorization:
+        raise ValueError("未能换取登录凭据，请重新授权")
+
+    warning = validate_authorization(authorization, serverid, http_session=auth_session)
+    profile = fetch_user_auth(authorization, serverid)
+    return authorization, serverid, profile, warning
+
+
+def parse_url_to_checkin_session(url: str) -> Tuple[str, Optional[str]]:
+    """两步授权第二阶段：单独使用一条新 code 换取签到 Session。"""
+    code, state = parse_code_from_url(url)
+    wechat_session = _traceint_session()
+    _prewarm_session(wechat_session, GET_TIME_URL)
+    wechat_sess_id = exchange_wechat_sess_id(code, state, wechat_session)
+    wechat_serverid = wechat_session.cookies.get("SERVERID")
+    warning = validate_wechat_sess_id(wechat_sess_id, "", wechat_serverid)
+    return build_checkin_session_id(wechat_sess_id, wechat_serverid), warning

@@ -8,13 +8,23 @@ import {
   Settings,
   MapPin,
   ChevronDown,
+  BookOpen,
 } from 'lucide-react';
 import clsx from 'clsx';
 import type { AxiosError } from 'axios';
-import { parseSessionIdFromUrl, updateConfig, type StatusData, type WechatProfilePayload } from '../lib/api';
+import {
+  getLocationPresets,
+  parseSessionIdFromUrl,
+  updateConfig,
+  type LocationPreset,
+  type StatusData,
+  type WechatProfilePayload,
+} from '../lib/api';
 import { extractSessionIdFromText } from '../lib/sessionId';
 import { WechatProfileCard } from './WechatProfileCard';
 import { getWechatConnectionBadge } from '../lib/checkinMessage';
+import { AnnouncementMarkdown } from './AnnouncementMarkdown';
+import { USE_GUIDE_CONTENT } from '../content/useGuide';
 
 const WECHAT_QR_URL = 'https://imagebed.way2api.fun/file/wegolibrary/1779168428849_qr.png';
 
@@ -90,11 +100,17 @@ export const ConfigTab: React.FC<Props> = ({ currentData, onUpdate }) => {
   // Link input state
   const [linkInput, setLinkInput] = useState('');
   const [showLinkInput, setShowLinkInput] = useState(false);
+  const [requiresSecondLink, setRequiresSecondLink] = useState(false);
   
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [wechatExpanded, setWechatExpanded] = useState(false);
   const [settingsExpanded, setSettingsExpanded] = useState(false);
+  const [guideExpanded, setGuideExpanded] = useState(false);
+  const [locationPresetsExpanded, setLocationPresetsExpanded] = useState(false);
+  const [locationPresets, setLocationPresets] = useState<LocationPreset[]>([]);
+  const [locationPresetsLoaded, setLocationPresetsLoaded] = useState(false);
+  const [locationPresetsError, setLocationPresetsError] = useState(false);
   const previousWechatStatusRef = useRef<string | undefined>(undefined);
 
   const wechatStatus = currentData?.wechat_connection_status;
@@ -137,6 +153,35 @@ export const ConfigTab: React.FC<Props> = ({ currentData, onUpdate }) => {
     }
   }, [currentData]);
 
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadLocationPresets = async () => {
+      try {
+        const presets = await getLocationPresets();
+        if (!cancelled) {
+          setLocationPresets(presets);
+          setLocationPresetsError(false);
+        }
+      } catch (error) {
+        console.error('获取定位复用信息失败', error);
+        if (!cancelled) {
+          setLocationPresetsError(true);
+        }
+      } finally {
+        if (!cancelled) {
+          setLocationPresetsLoaded(true);
+        }
+      }
+    };
+
+    loadLocationPresets();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const processText = async (text: string) => {
     if (!text || !text.trim()) {
       throw new Error('内容为空');
@@ -150,9 +195,23 @@ export const ConfigTab: React.FC<Props> = ({ currentData, onUpdate }) => {
     const direct = extractSessionIdFromText(text);
     if (direct) {
       targetSessionId = direct;
+      setRequiresSecondLink(false);
     } else {
       // 2. 一次粘贴双换票（auth → wechatAuth）
       const res = await parseSessionIdFromUrl(text.trim());
+      if (res.requires_second_link) {
+        setRequiresSecondLink(true);
+        setLinkInput('');
+        setShowLinkInput(false);
+        setMessage({
+          type: 'success',
+          text: '第一步已完成。请回到微信重新授权，再粘贴第二条新链接完成连接。不要使用微信内置网页打开链接，请改用其他浏览器。',
+        });
+        return;
+      }
+      if (!res.session_id) {
+        throw new Error('未获取到签到凭据，请重新授权');
+      }
       targetSessionId = res.session_id;
       connectWarning = res.warning;
       if (res.profile && Object.keys(res.profile).length > 0) {
@@ -176,6 +235,7 @@ export const ConfigTab: React.FC<Props> = ({ currentData, onUpdate }) => {
     });
     setLinkInput('');
     setShowLinkInput(false);
+    setRequiresSecondLink(false);
     onUpdate();
     setTimeout(() => setMessage(null), 5000);
   };
@@ -210,6 +270,9 @@ export const ConfigTab: React.FC<Props> = ({ currentData, onUpdate }) => {
       if (msg.includes('微信连接失败')) {
         setShowLinkInput(true);
       }
+      if (msg.includes('两步连接')) {
+        setRequiresSecondLink(false);
+      }
       setMessage({ type: 'error', text: msg });
     } finally {
       setLoading(false);
@@ -230,6 +293,9 @@ export const ConfigTab: React.FC<Props> = ({ currentData, onUpdate }) => {
       else if (Array.isArray(detail)) msg = detail.map((d) => d?.msg || String(d)).join('; ');
       if (msg.includes('微信连接失败')) {
         setShowLinkInput(true);
+      }
+      if (msg.includes('两步连接')) {
+        setRequiresSecondLink(false);
       }
       setMessage({ type: 'error', text: msg });
     } finally {
@@ -254,6 +320,11 @@ export const ConfigTab: React.FC<Props> = ({ currentData, onUpdate }) => {
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleApplyLocationPreset = (preset: LocationPreset) => {
+    setMajor(preset.venue_major.toString());
+    setMinor(preset.venue_minor.toString());
   };
 
   const wechatBadge = getWechatConnectionBadge(currentData?.wechat_connection_status);
@@ -298,6 +369,15 @@ export const ConfigTab: React.FC<Props> = ({ currentData, onUpdate }) => {
         </div>
 
         <div className="space-y-3">
+          {requiresSecondLink && (
+            <div className="rounded-lg border border-primary/20 bg-primary-light px-3 py-3 text-left">
+              <p className="text-sm font-semibold text-primary">第一步已完成</p>
+              <p className="mt-1 text-xs leading-relaxed text-slate-600">
+                请回到微信重新授权一次，再粘贴新生成的第二条链接完成连接。不要使用微信内置网页打开链接，请改用其他浏览器。
+              </p>
+            </div>
+          )}
+
           <button
             onClick={handlePasteAndLogin}
             disabled={loading}
@@ -308,7 +388,11 @@ export const ConfigTab: React.FC<Props> = ({ currentData, onUpdate }) => {
             ) : (
               <ClipboardPaste className="w-4 h-4" />
             )}
-            {loading ? '处理中...' : '2. 粘贴链接并登录'}
+            {loading
+              ? '处理中...'
+              : requiresSecondLink
+                ? '粘贴第二条新链接'
+                : '2. 粘贴链接并登录'}
           </button>
 
           <div
@@ -355,10 +439,73 @@ export const ConfigTab: React.FC<Props> = ({ currentData, onUpdate }) => {
           <div>
             <div className="text-sm font-medium text-primary mb-1">场馆定位参数</div>
             <div className="text-xs text-slate-600 leading-relaxed">
-              Major 和 Minor 是场馆的蓝牙信标编号（范围 1-65535）。
+              可手动填写参数，或复用站内已知图书馆定位信息。
             </div>
           </div>
         </div>
+
+        {locationPresets.length > 0 ? (
+          <div className="rounded-xl border border-slate-200 bg-slate-50/70 overflow-hidden">
+            <button
+              type="button"
+              onClick={() => setLocationPresetsExpanded((v) => !v)}
+              aria-expanded={locationPresetsExpanded}
+              className="w-full px-3 py-3 flex items-center justify-between gap-3 text-left hover:bg-white/60 transition-colors"
+            >
+              <div className="min-w-0">
+                <div className="text-sm font-semibold text-slate-800">已知图书馆定位信息</div>
+                <div className="mt-0.5 text-xs text-slate-400">{locationPresets.length} 个地点可复用</div>
+              </div>
+              <ChevronDown
+                className={clsx(
+                  'w-4 h-4 text-slate-400 shrink-0 transition-transform duration-300',
+                  locationPresetsExpanded && 'rotate-180',
+                )}
+              />
+            </button>
+            <div
+              className={clsx(
+                'grid transition-[grid-template-rows] duration-300 ease-in-out',
+                locationPresetsExpanded ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]',
+              )}
+            >
+              <div className="overflow-hidden">
+                <div className="border-t border-slate-200 p-3 space-y-2">
+                  {locationPresets.map((preset) => (
+                    <div
+                      key={`${preset.school}-${preset.area_name}`}
+                      className="flex items-start justify-between gap-3 rounded-lg border border-slate-100 bg-white px-3 py-3"
+                    >
+                      <div className="min-w-0 flex-1">
+                        <div className="text-sm font-medium leading-6 text-slate-800 break-words">
+                          {preset.label}
+                        </div>
+                        <div className="mt-1 font-mono text-xs text-slate-500">
+                          Major: {preset.venue_major} / Minor: {preset.venue_minor}
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => handleApplyLocationPreset(preset)}
+                        className="btn-secondary px-3 py-2 text-xs shrink-0"
+                      >
+                        使用
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-3 text-xs text-slate-500">
+            {locationPresetsLoaded
+              ? locationPresetsError
+                ? '暂时无法加载站内已知图书馆定位信息，可继续手动填写。'
+                : '暂无站内已知图书馆定位信息，可先手动填写。'
+              : '正在加载站内已知图书馆定位信息...'}
+          </div>
+        )}
 
         <div className="grid grid-cols-2 gap-4">
           <div>
@@ -399,6 +546,16 @@ export const ConfigTab: React.FC<Props> = ({ currentData, onUpdate }) => {
           <Save className="w-4 h-4" />
           保存参数
         </button>
+      </CollapsibleCard>
+
+      <CollapsibleCard
+        title="使用说明"
+        icon={<BookOpen className="w-5 h-5 text-primary shrink-0" />}
+        expanded={guideExpanded}
+        onToggle={() => setGuideExpanded((v) => !v)}
+        contentClassName="p-5"
+      >
+        <AnnouncementMarkdown content={USE_GUIDE_CONTENT} />
       </CollapsibleCard>
       
       {message && (

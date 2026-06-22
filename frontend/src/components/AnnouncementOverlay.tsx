@@ -14,7 +14,7 @@ export function AnnouncementOverlay({ announcement, isOpen, onMinimize }: Props)
   }
 
   return (
-    <div className="fixed inset-0 z-50">
+    <div className="fixed inset-0 z-[60]">
       <div className="absolute inset-0 bg-slate-900/35 backdrop-blur-[2px]" onClick={onMinimize} />
       <div className="absolute left-4 right-4 top-20 mx-auto max-w-md overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl shadow-slate-900/20">
         <div className="flex items-start justify-between gap-4 border-b border-slate-100 px-5 py-4">

@@ -6,6 +6,7 @@ from typing import Optional, List, Any
 from sqlmodel import Session
 from datetime import timedelta, datetime
 from contextlib import asynccontextmanager
+import json
 import urllib.parse
 import requests
 
@@ -16,8 +17,14 @@ from app.database import (
     create_user, get_user_by_username, get_all_configs, delete_user,
     get_all_users, get_announcement, get_or_create_announcement,
     get_profile_display, build_wechat_profile_response, get_wechat_connection_status,
+    deactivate_session_by_owner,
 )
-from app.traceint_client import parse_url_to_session_and_profile, parse_code_from_url
+from app.traceint_client import (
+    parse_url_to_session_and_profile,
+    parse_url_to_authorization_and_profile,
+    parse_url_to_checkin_session,
+    parse_code_from_url,
+)
 from app.scheduler import start_scheduler, shutdown_scheduler, keep_alive_for_user, start_auto_checkin_for_user, stop_auto_checkin_for_user
 from app.core import WegolibCore
 from app.auth import (
@@ -108,6 +115,13 @@ class AdminAnnouncementResponse(BaseModel):
     updated_at: Optional[str] = None
     published_at: Optional[str] = None
 
+class LocationPresetResponse(BaseModel):
+    school: str
+    area_name: str
+    label: str
+    venue_major: int
+    venue_minor: int
+
 class UpdateAnnouncementDraftRequest(BaseModel):
     content: str = ""
 
@@ -116,10 +130,58 @@ WECHAT_CONNECT_HELP_TEXT = (
     "微信连接失败。请先确认：1. 今天已经打开过“我去图书馆”小程序页面；"
     "2. 回到微信重新授权后，再复制新的回调链接粘贴。"
 )
+WECHAT_TWO_STEP_HELP_TEXT = (
+    "连续授权失败，已切换为两步连接。请重新授权并粘贴第一条新链接，"
+    "完成后按页面提示再次授权。请不要使用微信内置网页打开链接，改用其他浏览器。"
+)
+WECHAT_SECOND_STEP_HELP_TEXT = (
+    "第一步已经完成。请回到微信重新授权，再粘贴新生成的第二条链接完成连接。"
+    "请不要使用微信内置网页打开链接，改用其他浏览器。"
+)
+WECHAT_SESSION_ONLY_HELP_TEXT = (
+    "微信连接失败。你的用户资料已经同步，无需重复获取。"
+    "请重新授权后粘贴一条新链接，系统将直接更新签到凭据。"
+    "请不要使用微信内置网页打开链接，改用其他浏览器。"
+)
+WECHAT_PENDING_EXPIRE_MINUTES = 15
 WECHAT_AVATAR_ALLOWED_HOSTS = {
     "static.wechat.v2.traceint.com",
     "wechat.v2.traceint.com",
 }
+DEFAULT_LOCATION_PRESET_MAJOR = 20
+DEFAULT_LOCATION_PRESET_MINOR = 9
+DEFAULT_LOCATION_PRESET_SCHOOL = "南京农业大学（卫岗校区/滨江校区）"
+DEFAULT_LOCATION_PRESET_AREA = "滨江校区"
+CHECKIN_RATE_LIMIT_WINDOW_SECONDS = 60
+CHECKIN_RATE_LIMIT_MAX_ATTEMPTS = 2
+_manual_checkin_attempts: dict[int, list[datetime]] = {}
+
+
+def _enforce_manual_checkin_rate_limit(user_id: int) -> None:
+    now = datetime.now()
+    window_start = now - timedelta(seconds=CHECKIN_RATE_LIMIT_WINDOW_SECONDS)
+    recent_attempts = [
+        attempt_at
+        for attempt_at in _manual_checkin_attempts.get(user_id, [])
+        if attempt_at > window_start
+    ]
+    if len(recent_attempts) >= CHECKIN_RATE_LIMIT_MAX_ATTEMPTS:
+        retry_after = max(
+            1,
+            int(
+                CHECKIN_RATE_LIMIT_WINDOW_SECONDS
+                - (now - min(recent_attempts)).total_seconds()
+            ),
+        )
+        _manual_checkin_attempts[user_id] = recent_attempts
+        raise HTTPException(
+            status_code=429,
+            detail=f"签到操作太频繁，请 {retry_after} 秒后再试",
+            headers={"Retry-After": str(retry_after)},
+        )
+
+    recent_attempts.append(now)
+    _manual_checkin_attempts[user_id] = recent_attempts
 
 # ============ Auth Routes ============
 
@@ -266,8 +328,18 @@ def _build_admin_announcement_response(announcement: Optional[Announcement]) -> 
         published_at=_format_datetime(announcement.published_at),
     )
 
+def _clear_pending_traceint_authorization(user: User) -> None:
+    user.pending_traceint_code = None
+    user.pending_traceint_profile = None
+    user.pending_traceint_at = None
+
+
 @app.post("/api/parse-sessionid")
-def parse_sessionid(req: ParseSessionIdRequest, current_user: User = Depends(get_current_user)):
+def parse_sessionid(
+    req: ParseSessionIdRequest,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
     url = (req.url or "").strip()
     if not url:
         raise HTTPException(status_code=400, detail="url 不能为空")
@@ -277,23 +349,100 @@ def parse_sessionid(req: ParseSessionIdRequest, current_user: User = Depends(get
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=WECHAT_CONNECT_HELP_TEXT) from exc
 
+    failures = current_user.wechat_authorization_failures or 0
+    config = get_config_by_owner(session, current_user.id)
+    has_synced_wechat_profile = bool(
+        config and config.wechat_profile_at and config.wechat_nick
+    )
+    pending_expired = (
+        current_user.pending_traceint_at is not None
+        and current_user.pending_traceint_at
+        < datetime.now() - timedelta(minutes=WECHAT_PENDING_EXPIRE_MINUTES)
+    )
+    if pending_expired:
+        _clear_pending_traceint_authorization(current_user)
+
     try:
+        if current_user.pending_traceint_code:
+            code, _ = parse_code_from_url(url)
+            if code == current_user.pending_traceint_code:
+                raise ValueError("第二步需要重新授权生成一条新链接")
+            session_id, warning = parse_url_to_checkin_session(url)
+            profile_response = json.loads(current_user.pending_traceint_profile or "null")
+            _clear_pending_traceint_authorization(current_user)
+            current_user.wechat_authorization_failures = 0
+            session.add(current_user)
+            session.commit()
+            return {
+                "session_id": session_id,
+                "profile": profile_response,
+                "warning": warning,
+                "requires_second_link": False,
+            }
+
+        if has_synced_wechat_profile:
+            session_id, warning = parse_url_to_checkin_session(url)
+            current_user.wechat_authorization_failures = 0
+            session.add(current_user)
+            session.commit()
+            return {
+                "session_id": session_id,
+                "profile": None,
+                "warning": warning,
+                "requires_second_link": False,
+            }
+
+        if failures >= 1:
+            code, _ = parse_code_from_url(url)
+            _authorization, _serverid, profile_snapshot, warning = (
+                parse_url_to_authorization_and_profile(url)
+            )
+            profile_response = (
+                _snapshot_to_response_dict(profile_snapshot) if profile_snapshot else None
+            )
+            current_user.pending_traceint_code = code
+            current_user.pending_traceint_profile = json.dumps(profile_response)
+            current_user.pending_traceint_at = datetime.now()
+            session.add(current_user)
+            session.commit()
+            return {
+                "session_id": None,
+                "profile": profile_response,
+                "warning": warning,
+                "requires_second_link": True,
+            }
+
         session_id, profile_snapshot, warning = parse_url_to_session_and_profile(url)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=WECHAT_CONNECT_HELP_TEXT) from exc
+        current_user.wechat_authorization_failures = (
+            current_user.wechat_authorization_failures or 0
+        ) + 1
+        session.add(current_user)
+        session.commit()
+        if current_user.pending_traceint_code:
+            detail = WECHAT_SECOND_STEP_HELP_TEXT
+        elif has_synced_wechat_profile:
+            detail = WECHAT_SESSION_ONLY_HELP_TEXT
+        elif current_user.wechat_authorization_failures >= 1:
+            detail = WECHAT_TWO_STEP_HELP_TEXT
+        else:
+            detail = WECHAT_CONNECT_HELP_TEXT
+        raise HTTPException(status_code=400, detail=detail) from exc
     except Exception as exc:
         import logging
         logging.getLogger(__name__).exception("parse-sessionid 未处理异常")
-        raise HTTPException(
-            status_code=400,
-            detail=WECHAT_CONNECT_HELP_TEXT,
-        ) from exc
+        raise HTTPException(status_code=400, detail=WECHAT_CONNECT_HELP_TEXT) from exc
+
+    current_user.wechat_authorization_failures = 0
+    session.add(current_user)
+    session.commit()
 
     profile_response = _snapshot_to_response_dict(profile_snapshot) if profile_snapshot else None
     return {
         "session_id": session_id,
         "profile": profile_response,
         "warning": warning,
+        "requires_second_link": False,
     }
 
 @app.get("/api/wechat-avatar")
@@ -334,6 +483,59 @@ def get_public_announcement(current_user: User = Depends(get_current_user), sess
     announcement = get_announcement(session)
     return _build_public_announcement_response(announcement)
 
+@app.get("/api/location-presets", response_model=List[LocationPresetResponse])
+def get_location_presets(
+    _current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    grouped: dict[tuple[str, str], dict[tuple[int, int], int]] = {}
+    for config in get_all_configs(session):
+        school = (config.wechat_sch or "").strip()
+        area_name = (config.wechat_area_name or "").strip()
+        if not school or not area_name:
+            continue
+
+        try:
+            venue_major = int(config.major)
+            venue_minor = int(config.minor)
+        except (TypeError, ValueError):
+            continue
+
+        if not (1 <= venue_major <= 65535 and 1 <= venue_minor <= 65535):
+            continue
+        if (
+            venue_major == DEFAULT_LOCATION_PRESET_MAJOR
+            and venue_minor == DEFAULT_LOCATION_PRESET_MINOR
+            and (
+                school != DEFAULT_LOCATION_PRESET_SCHOOL
+                or area_name != DEFAULT_LOCATION_PRESET_AREA
+            )
+        ):
+            continue
+
+        location_key = (school, area_name)
+        beacon_key = (venue_major, venue_minor)
+        beacon_counts = grouped.setdefault(location_key, {})
+        beacon_counts[beacon_key] = beacon_counts.get(beacon_key, 0) + 1
+
+    presets: list[LocationPresetResponse] = []
+    for (school, area_name), beacon_counts in grouped.items():
+        (venue_major, venue_minor), _count = sorted(
+            beacon_counts.items(),
+            key=lambda item: (-item[1], item[0][0], item[0][1]),
+        )[0]
+        presets.append(
+            LocationPresetResponse(
+                school=school,
+                area_name=area_name,
+                label=f"{school} · {area_name}",
+                venue_major=venue_major,
+                venue_minor=venue_minor,
+            )
+        )
+
+    return sorted(presets, key=lambda preset: preset.label)
+
 @app.get("/api/status")
 def get_status(current_user: User = Depends(get_current_user), session: Session = Depends(get_session)):
     config = get_config_by_owner(session, current_user.id)
@@ -359,7 +561,7 @@ def get_status(current_user: User = Depends(get_current_user), session: Session 
     profile_display = get_profile_display(config)
 
     return {
-        "is_configured": True,
+        "is_configured": bool(config.session_id),
         "session_id_preview": config.session_id[:20] + "..." if config.session_id else "",
         "major": config.major,
         "minor": config.minor,
@@ -420,6 +622,8 @@ def trigger_checkin(current_user: User = Depends(get_current_user), session: Ses
 
     if not config or not config.session_id:
         raise HTTPException(status_code=400, detail="未配置，请先连接微信")
+
+    _enforce_manual_checkin_rate_limit(current_user.id)
 
     core = WegolibCore(config.session_id)
     result = core.sign_in(config.major, config.minor)
@@ -533,8 +737,8 @@ def get_admin_users(admin: User = Depends(get_current_admin), session: Session =
         }
         
         if config:
-            info["is_configured"] = True
-            info["status"] = "活跃" if config.is_active else "未激活"
+            info["is_configured"] = bool(config.session_id)
+            info["status"] = "活跃" if config.is_active and config.session_id else "已登出"
             if config.last_checkin:
                 info["last_checkin"] = config.last_checkin.strftime("%Y-%m-%d %H:%M:%S")
             info["profile_display"] = get_profile_display(config)
@@ -553,14 +757,10 @@ def delete_admin_user(user_id: int, admin: User = Depends(get_current_admin), se
     delete_user(session, user_id)
     return {"message": "用户已删除"}
 
-@app.post("/api/admin/users/{user_id}/checkin")
-def admin_trigger_checkin(user_id: int, admin: User = Depends(get_current_admin), session: Session = Depends(get_session)):
-    """管理员：强制为指定用户签到"""
-    config = get_config_by_owner(session, user_id)
-    if not config or not config.session_id:
-        raise HTTPException(status_code=400, detail="该用户未配置")
-    
-    core = WegolibCore(config.session_id)
-    result = core.sign_in(config.major, config.minor)
-    log_checkin_by_owner(session, user_id, result["success"], result["message"])
-    return result
+@app.post("/api/admin/users/{user_id}/logout")
+def admin_logout_user(user_id: int, admin: User = Depends(get_current_admin), session: Session = Depends(get_session)):
+    """管理员：停止指定用户当前微信会话续期，等待用户重新授权。"""
+    if not deactivate_session_by_owner(session, user_id):
+        raise HTTPException(status_code=400, detail="该用户尚未配置微信会话")
+    stop_auto_checkin_for_user(user_id)
+    return {"message": "用户已登出，重新授权前不会继续续期"}

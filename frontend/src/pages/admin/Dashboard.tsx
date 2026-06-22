@@ -3,7 +3,7 @@ import type { AxiosError } from 'axios';
 import {
   getAdminUsers,
   deleteAdminUser,
-  adminTriggerCheckIn,
+  adminLogoutUser,
   getAdminAnnouncement,
   updateAdminAnnouncementDraft,
   publishAdminAnnouncement,
@@ -12,7 +12,7 @@ import {
 import type { AdminUserConfig, AdminAnnouncementData } from '../../lib/api';
 import {
   Trash2,
-  PlayCircle,
+  LogOut,
   ArrowLeft,
   Megaphone,
   Save,
@@ -22,6 +22,7 @@ import {
   FileText,
   CheckCircle2,
   AlertCircle,
+  ChevronDown,
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { AnnouncementMarkdown } from '../../components/AnnouncementMarkdown';
@@ -32,6 +33,7 @@ export default function AdminDashboard() {
   const [draftContent, setDraftContent] = useState('');
   const [loading, setLoading] = useState(true);
   const [announcementAction, setAnnouncementAction] = useState<'save' | 'publish' | 'unpublish' | null>(null);
+  const [announcementExpanded, setAnnouncementExpanded] = useState(false);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const navigate = useNavigate();
 
@@ -86,13 +88,14 @@ export default function AdminDashboard() {
     }
   };
 
-  const handleTrigger = async (userId: number) => {
+  const handleLogout = async (userId: number) => {
+    if (!window.confirm('确定要登出该用户吗？重新授权前将停止续期，现有签到会话也会失效。')) return;
     try {
-      await adminTriggerCheckIn(userId);
-      showMessage({ type: 'success', text: '已触发签到' });
+      await adminLogoutUser(userId);
+      showMessage({ type: 'success', text: '用户已登出，重新授权前不会继续续期' });
       fetchUsers();
     } catch (error) {
-      showMessage({ type: 'error', text: getErrorMessage(error, '触发失败') });
+      showMessage({ type: 'error', text: getErrorMessage(error, '登出失败') });
     }
   };
 
@@ -172,7 +175,12 @@ export default function AdminDashboard() {
         ) : (
           <>
             <section className="bg-white rounded-xl shadow-sm border border-slate-100 overflow-hidden">
-              <div className="px-6 py-5 border-b border-slate-100 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+              <button
+                type="button"
+                onClick={() => setAnnouncementExpanded((value) => !value)}
+                aria-expanded={announcementExpanded}
+                className="w-full px-6 py-5 flex flex-col gap-3 text-left hover:bg-slate-50 transition-colors md:flex-row md:items-center md:justify-between"
+              >
                 <div className="flex items-center gap-3">
                   <div className="w-11 h-11 rounded-2xl bg-primary-light flex items-center justify-center">
                     <Megaphone className="w-5 h-5 text-primary" />
@@ -182,12 +190,18 @@ export default function AdminDashboard() {
                     <p className="text-sm text-slate-500">保存草稿后可手动发布，普通用户首页只展示当前已发布公告。</p>
                   </div>
                 </div>
-                <div className={announcement?.is_published ? 'status-badge-success' : 'status-badge-neutral'}>
-                  {announcement?.is_published ? '已发布' : '未发布'}
+                <div className="flex items-center gap-3 self-end md:self-auto">
+                  <div className={announcement?.is_published ? 'status-badge-success' : 'status-badge-neutral'}>
+                    {announcement?.is_published ? '已发布' : '未发布'}
+                  </div>
+                  <ChevronDown className={`w-5 h-5 text-slate-400 transition-transform duration-200 ${
+                    announcementExpanded ? 'rotate-180' : ''
+                  }`} />
                 </div>
-              </div>
+              </button>
 
-              <div className="p-6 grid gap-6 xl:grid-cols-[minmax(0,1.35fr)_minmax(320px,0.65fr)]">
+              {announcementExpanded && (
+              <div className="p-6 border-t border-slate-100 grid gap-6 xl:grid-cols-[minmax(0,1.35fr)_minmax(320px,0.65fr)]">
                 <div className="space-y-4">
                   <div className="flex items-center justify-between gap-3">
                     <label className="text-sm font-semibold text-slate-700">公告正文</label>
@@ -277,6 +291,7 @@ export default function AdminDashboard() {
                   </div>
                 </div>
               </div>
+              )}
             </section>
 
             <section className="bg-white rounded-xl shadow-sm overflow-hidden border border-slate-100">
@@ -329,10 +344,10 @@ export default function AdminDashboard() {
                             <span className="text-slate-400">{profileLabel ?? user.wechat_nick ?? '—'}</span>
                           )}
                         </td>
-                        <td className="px-4 py-4 text-sm text-slate-500 max-w-[120px] truncate">
+                        <td className="px-4 py-4 text-sm text-slate-500 min-w-[150px] max-w-[220px] whitespace-normal break-words leading-6">
                           {user.profile_display === 'ready' ? (nameNo || '—') : profileLabel ?? '—'}
                         </td>
-                        <td className="px-4 py-4 text-sm text-slate-500 max-w-[100px] truncate">
+                        <td className="px-4 py-4 text-sm text-slate-500 min-w-[180px] max-w-[280px] whitespace-normal break-words leading-6">
                           {user.profile_display === 'ready' ? (user.wechat_sch || '—') : profileLabel ?? '—'}
                         </td>
                         <td className="px-4 py-4">
@@ -349,12 +364,13 @@ export default function AdminDashboard() {
                         <td className="px-4 py-4 text-right">
                           <div className="flex justify-end gap-2">
                             <button
-                              onClick={() => handleTrigger(user.user_id)}
+                              onClick={() => handleLogout(user.user_id)}
                               disabled={!user.is_configured}
-                              className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors disabled:opacity-30 disabled:hover:bg-transparent"
-                              title="强制签到"
+                              className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors disabled:opacity-30 disabled:hover:bg-transparent"
+                              title="登出用户并停止续期"
+                              aria-label={`登出用户 ${user.username}`}
                             >
-                              <PlayCircle className="w-4 h-4" />
+                              <LogOut className="w-4 h-4" />
                             </button>
                             <button
                               onClick={() => handleDelete(user.user_id)}

@@ -12,6 +12,10 @@ class User(SQLModel, table=True):
     username: str = Field(index=True, unique=True)
     password_hash: str
     is_admin: bool = Field(default=False)
+    wechat_authorization_failures: int = Field(default=0)
+    pending_traceint_code: Optional[str] = None
+    pending_traceint_profile: Optional[str] = None
+    pending_traceint_at: Optional[datetime] = None
     created_at: datetime = Field(default_factory=datetime.now)
 
 class AuthSession(SQLModel, table=True):
@@ -88,6 +92,19 @@ def create_db_and_tables():
         existing_tables = inspector.get_table_names()
         
         with engine.connect() as conn:
+            if "user" in existing_tables:
+                user_columns = [col["name"] for col in inspector.get_columns("user")]
+                user_columns_to_add = {
+                    "wechat_authorization_failures": "INTEGER DEFAULT 0 NOT NULL",
+                    "pending_traceint_code": "VARCHAR",
+                    "pending_traceint_profile": "VARCHAR",
+                    "pending_traceint_at": "DATETIME",
+                }
+                for col_name, col_type in user_columns_to_add.items():
+                    if col_name not in user_columns:
+                        print(f"Migrating: Adding {col_name} column to user table")
+                        conn.execute(text(f"ALTER TABLE user ADD COLUMN {col_name} {col_type}"))
+
             if "config" in existing_tables:
                 columns = [col["name"] for col in inspector.get_columns("config")]
                 
@@ -243,6 +260,16 @@ _WECHAT_SESSION_EXPIRED_MARKERS = (
     "登录状态已经失效无法重新登录",
 )
 
+_WECHAT_AUTH_FAILURE_MARKERS = (
+    "Invalid Cookie",
+    "wechatSESS_ID not found",
+    "未登录",
+    "请先登录",
+    "授权失败",
+    "微信授权失败",
+    "未配置",
+)
+
 
 def get_wechat_connection_status(config: Optional[Config]) -> str:
     """
@@ -262,7 +289,7 @@ def get_wechat_connection_status(config: Optional[Config]) -> str:
     if any(marker in combined for marker in _WECHAT_SESSION_EXPIRED_MARKERS):
         return "expired"
 
-    if checkin_result.startswith("签到失败"):
+    if any(marker in combined for marker in _WECHAT_AUTH_FAILURE_MARKERS):
         return "unauthorized"
 
     if last_log and "KeepAlive" in last_log and "success" not in last_log.lower():
@@ -341,6 +368,19 @@ def update_session_id_for_config(session: Session, config: Config, new_session_i
     config.session_id = new_session_id
     session.add(config)
     session.commit()
+
+def deactivate_session_by_owner(session: Session, owner_id: int) -> bool:
+    """停用当前微信会话；下一次重新授权保存配置时会恢复激活。"""
+    config = get_config_by_owner(session, owner_id)
+    if not config:
+        return False
+    config.session_id = ""
+    config.is_active = False
+    config.auto_checkin_expire_at = None
+    config.last_log = "AdminLogout: session renewal disabled until reauthorization"
+    session.add(config)
+    session.commit()
+    return True
 
 # ============ 公告相关操作 ============
 

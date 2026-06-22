@@ -58,6 +58,14 @@ export interface AnnouncementData {
   published_at: string | null;
 }
 
+export interface LocationPreset {
+  school: string;
+  area_name: string;
+  label: string;
+  venue_major: number;
+  venue_minor: number;
+}
+
 export interface AdminAnnouncementData {
   draft_content: string;
   published_content: string;
@@ -96,9 +104,10 @@ export interface WechatProfilePayload {
 }
 
 export interface ParseSessionIdResponse {
-  session_id: string;
+  session_id: string | null;
   profile: WechatProfilePayload | null;
   warning?: string | null;
+  requires_second_link?: boolean;
 }
 
 // ============ Auth API ============
@@ -137,6 +146,11 @@ export const getStatus = async () => {
 
 export const getAnnouncement = async () => {
   const res = await api.get<AnnouncementData>('/announcement');
+  return res.data;
+};
+
+export const getLocationPresets = async () => {
+  const res = await api.get<LocationPreset[]>('/location-presets');
   return res.data;
 };
 
@@ -220,7 +234,7 @@ export const deleteAdminUser = async (userId: number) => {
   return res.data;
 };
 
-export const adminTriggerCheckIn = async (userId: number) => {
-  const res = await api.post(`/admin/users/${userId}/checkin`);
+export const adminLogoutUser = async (userId: number) => {
+  const res = await api.post(`/admin/users/${userId}/logout`);
   return res.data;
 };
